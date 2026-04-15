@@ -101,14 +101,14 @@ jobs:
 
   # ── MSRV gate ────────────────────────────────────────────────────────────────
   msrv:
-    name: MSRV (1.86)
+    name: MSRV (1.88)
     needs: [fmt, clippy]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.86"
+          toolchain: "1.88"
       - uses: actions/cache@v4
         with:
           path: |

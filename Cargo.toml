@@ -62,11 +62,11 @@ tower-http = { version = "0.6", features = ["cors"] }
 [workspace.package]
 version = "0.6.0"
 edition = "2021"
-rust-version = "1.86"
+rust-version = "1.88"
 authors = ["Scopeon Contributors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/scopeon/scopeon"
-homepage = "https://github.com/scopeon/scopeon"
+repository = "https://github.com/sorunokoe/Scopeon"
+homepage = "https://github.com/sorunokoe/Scopeon"
 documentation = "https://docs.rs/scopeon"
 readme = "README.md"
 keywords = ["ai", "observability", "claude", "tokens", "tui"]

@@ -62,13 +62,11 @@ mod tests {
 
     #[test]
     fn test_claude_config_dir_env_var() {
-        // When CLAUDE_CONFIG_DIR is set, it should be used instead of ~/.claude
-        std::env::set_var("CLAUDE_CONFIG_DIR", "/custom/claude");
+        // Use a temp-dir path so the test works on all platforms.
+        let custom_dir = std::env::temp_dir().join("scopeon_test_claude");
+        std::env::set_var("CLAUDE_CONFIG_DIR", custom_dir.to_str().unwrap());
         let provider = ClaudeCodeProvider::new();
-        assert_eq!(
-            provider.projects_dir,
-            PathBuf::from("/custom/claude/projects")
-        );
+        assert_eq!(provider.projects_dir, custom_dir.join("projects"));
         std::env::remove_var("CLAUDE_CONFIG_DIR");
     }
 

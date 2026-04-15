@@ -15,7 +15,7 @@
 [![CI](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml/badge.svg)](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml)
 [![GitHub release](https://img.shields.io/github/v/release/sorunokoe/Scopeon?label=release)](https://github.com/sorunokoe/Scopeon/releases)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
-[![MSRV: 1.86](https://img.shields.io/badge/MSRV-1.86-orange)](https://blog.rust-lang.org/2025/02/20/Rust-1.86.0.html)
+[![MSRV: 1.88](https://img.shields.io/badge/MSRV-1.88-orange)](https://blog.rust-lang.org/2025/05/15/Rust-1.88.0.html)
 
 [**Install**](#installation) · [**Quick Start**](#quick-start) · [**Docs**](docs/) · [**Contributing**](#contributing)
 
@@ -108,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/sorunokoe/Scopeon/main/install.sh |
 cargo install scopeon
 ```
 
-**Requirements:** Rust 1.86+ · macOS 12+ or Linux (glibc 2.31+) · Windows 10+
+**Requirements:** Rust 1.88+ · macOS 12+ or Linux (glibc 2.31+) · Windows 10+
 
 ### Pre-built binaries
 

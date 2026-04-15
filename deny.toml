@@ -30,6 +30,7 @@ allow = [
     "Unicode-DFS-2016",
     "CC0-1.0",
     "Zlib",
+    "BSL-1.0",
 ]
 
 # Exceptions for crates that are under dual/custom licenses accepted on a
@@ -47,6 +48,14 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # Error on any vulnerability (warn = print but don't fail).
 version = 2
 
+# Unmaintained crates that are transitive deps we cannot control.
+# paste: RUSTSEC-2024-0384 (ratatui dep, no upgrade path)
+# instant: RUSTSEC-2024-0436 (transitive dep, no upgrade path)
+ignore = [
+    { id = "RUSTSEC-2024-0384", reason = "transitive dep via ratatui; no safe upgrade available" },
+    { id = "RUSTSEC-2024-0436", reason = "transitive dep; no safe upgrade available" },
+]
+
 # ---------------------------------------------------------------------------
 # Banned crates
 # ---------------------------------------------------------------------------
@@ -54,8 +63,9 @@ version = 2
 # Deny multiple versions of the same crate.
 multiple-versions = "warn"
 
-# Deny wildcard dependencies.
-wildcards = "deny"
+# Deny wildcard (`version = "*"`) dependencies in published crates.
+# Workspace path deps (no version specifier) are not wildcards — set to warn.
+wildcards = "warn"
 
 # Crates that are explicitly banned (none currently).
 deny = []
