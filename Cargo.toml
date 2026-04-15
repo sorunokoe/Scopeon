@@ -42,10 +42,10 @@ default = []
 # OTel OTLP export: planned for future scopeon-otel crate
 
 [dependencies]
-scopeon-core = { path = "crates/scopeon-core" }
-scopeon-collector = { path = "crates/scopeon-collector" }
-scopeon-mcp = { path = "crates/scopeon-mcp" }
-scopeon-tui = { path = "crates/scopeon-tui" }
+scopeon-core = { path = "crates/scopeon-core", version = "0.6.0" }
+scopeon-collector = { path = "crates/scopeon-collector", version = "0.6.0" }
+scopeon-mcp = { path = "crates/scopeon-mcp", version = "0.6.0" }
+scopeon-tui = { path = "crates/scopeon-tui", version = "0.6.0" }
 tokio = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
