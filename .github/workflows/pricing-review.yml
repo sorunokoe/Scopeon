@@ -26,7 +26,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run pricing tests
-        run: cargo test --workspace --test-threads=1 -- cost:: 2>&1
+        run: |
+          cargo test --workspace --test-threads=1 -- cost:: 2>&1
 
   open-reminder-issue:
     name: Open monthly reminder issue
