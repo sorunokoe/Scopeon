@@ -190,7 +190,7 @@ fn read_rss_mb() -> Option<f64> {
         if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
             for line in status.lines() {
                 if let Some(rest) = line.strip_prefix("VmRSS:") {
-                    if let Some(kb_str) = rest.trim().split_whitespace().next() {
+                    if let Some(kb_str) = rest.split_whitespace().next() {
                         if let Ok(kb) = kb_str.parse::<u64>() {
                             return Some(kb as f64 / 1024.0);
                         }

@@ -7,8 +7,8 @@
 # Docs: https://embarkstudios.github.io/cargo-deny/
 
 [graph]
-# Include dev-dependencies in checks.
-include-dev = true
+# Targets to check (empty = all targets).
+targets = []
 
 # ---------------------------------------------------------------------------
 # Licenses
