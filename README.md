@@ -1,7 +1,6 @@
 <div align="center">
 
 <h1>
-  <img src="https://raw.githubusercontent.com/sorunokoe/Scopeon/main/assets/logo.svg" alt="Scopeon" width="48" height="48" />
   <br/>Scopeon
 </h1>
 
