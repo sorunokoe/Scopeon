@@ -1,9 +1,5 @@
 <div align="center">
 
-<h1>
-  <br/>Scopeon
-</h1>
-
 <pre align="center">
 ◈  ╔═╗╔═╗╔═╗╔═╗╔═╗╔═╗╔╗╔
    ╚═╗║  ║ ║╠═╝║╣ ║ ║║║║
@@ -13,6 +9,8 @@
 </pre>
 
 **The AI context observatory — for every coding agent, every token, every dollar.**
+
+<img src="assets/0-dashboard.png" alt="Scopeon Dashboard" width="900" />
 
 [![CI](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml/badge.svg)](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml)
 [![GitHub release](https://img.shields.io/github/v/release/sorunokoe/Scopeon?label=release)](https://github.com/sorunokoe/Scopeon/releases)
@@ -28,27 +26,6 @@
 *You fire up Claude Code and start building. An hour later: **"Context window full."** You have no idea what burned it — was it the MCP tools? The thinking budget? Yesterday's file edits? You're flying blind on a meter that costs real money.*
 
 **Scopeon gives you the instrument panel.**
-
-```
-╔══════════════════════════════════ Scopeon v0.6.0 ═══════════════════════════════════════╗
-║  Health 91/100  ▪  Cost today $2.41  ▪  Cache 68.3%  ▪  Ctx 73% ████████░░ ~12t [!]   ║
-╠════════════╦════════════╦═══════════╦═══════════╦═════════════╦════════════════════════╣
-║ Dashboard  ║  Sessions  ║ Insights  ║  Budget   ║  Providers  ║        Agents          ║
-╠════════════╩════════════╩═══════════╩═══════════╩═════════════╩════════════════════════╣
-║                                                                                          ║
-║  TURN BREAKDOWN — last 5 turns                                                           ║
-║  ┌──────┬────────────┬───────────┬───────────┬──────────┬─────────┬──────────┐          ║
-║  │ Turn │ Input      │ Cache↓    │ Cache↑    │ Thinking │ Output  │ Cost     │          ║
-║  ├──────┼────────────┼───────────┼───────────┼──────────┼─────────┼──────────┤          ║
-║  │  142 │  48,291    │  112,443  │      0    │  12,800  │  2,847  │ $0.182   │          ║
-║  │  141 │  46,102    │  115,201  │      0    │   8,192  │  1,923  │ $0.154   │          ║
-║  │  140 │  44,887    │  110,988  │  24,601   │  16,384  │  3,211  │ $0.231   │          ║
-║  └──────┴────────────┴───────────┴───────────┴──────────┴─────────┴──────────┘          ║
-║                                                                                          ║
-║  PROMPT CACHE ████████████████████████░░░░░░  68.3% hit rate  saved $1.82 today        ║
-║  CONTEXT      █████████████████████████████████████░░░░░░  73.1% used  ~12 turns left  ║
-╚══════════════════════════════════════════════════════════════════════════════════════════╝
-```
 
 ---
 
@@ -79,6 +56,33 @@
 - **Local-first** — no cloud backend, no accounts, data stays on your machine
 
 → **[Full feature list](docs/features.md)**
+
+---
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="assets/1-sessions.png" alt="Sessions tab" width="440"/><br/>
+      <sub><b>Sessions</b> — full session list with per-turn cost, cache %, MCP call count</sub>
+    </td>
+    <td align="center">
+      <img src="assets/2-insights.png" alt="Insights tab" width="440"/><br/>
+      <sub><b>Insights</b> — health score, waste signals, cache ROI &amp; optimization tips</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="assets/3-budget.png" alt="Budget tab" width="440"/><br/>
+      <sub><b>Budget</b> — daily/weekly/monthly spend, by model, by project, 14-day chart</sub>
+    </td>
+    <td align="center">
+      <img src="assets/4-providers.png" alt="Providers tab" width="440"/><br/>
+      <sub><b>Providers</b> — auto-detected agents with data path &amp; session stats</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
