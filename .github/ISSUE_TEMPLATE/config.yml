@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Ask a question
-    url: https://github.com/scopeon/scopeon/discussions
+    url: https://github.com/sorunokoe/Scopeon/discussions
     about: Questions, ideas, and help — use Discussions rather than Issues
   - name: Security vulnerability
-    url: https://github.com/scopeon/scopeon/security/advisories/new
+    url: https://github.com/sorunokoe/Scopeon/security/advisories/new
     about: Report a security vulnerability privately

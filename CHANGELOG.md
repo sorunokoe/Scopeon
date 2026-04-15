@@ -445,11 +445,11 @@ This release applies a **TRIZ-inspired v2 analysis** — 10 inventive solutions 
 
 ---
 
-[Unreleased]: https://github.com/scopeon/scopeon/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/scopeon/scopeon/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/scopeon/scopeon/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/scopeon/scopeon/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/scopeon/scopeon/releases/tag/v0.1.0
+[Unreleased]: https://github.com/sorunokoe/Scopeon/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/sorunokoe/Scopeon/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/sorunokoe/Scopeon/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/sorunokoe/Scopeon/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/sorunokoe/Scopeon/releases/tag/v0.1.0
 
 
 

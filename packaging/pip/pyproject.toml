@@ -22,5 +22,5 @@ classifiers = [
 scopeon = "scopeon.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/scopeon/scopeon"
-Repository = "https://github.com/scopeon/scopeon"
+Homepage = "https://github.com/sorunokoe/Scopeon"
+Repository = "https://github.com/sorunokoe/Scopeon"

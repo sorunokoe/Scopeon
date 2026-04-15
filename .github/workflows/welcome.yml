@@ -36,8 +36,8 @@ jobs:
             - Paste the relevant **log output** (`RUST_LOG=scopeon=debug scopeon start`)
 
             We usually respond within a couple of days. In the meantime, you might find
-            answers in the [discussions](https://github.com/scopeon/scopeon/discussions)
-            or the [README](https://github.com/scopeon/scopeon/blob/main/README.md).
+            answers in the [discussions](https://github.com/sorunokoe/Scopeon/discussions)
+            or the [README](https://github.com/sorunokoe/Scopeon/blob/main/README.md).
 
           pr-message: |
             👋 Thanks for your first pull request to Scopeon! 🎉

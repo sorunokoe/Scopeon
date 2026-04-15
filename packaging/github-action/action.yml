@@ -43,9 +43,9 @@ runs:
           *)               echo "Unsupported platform: ${OS}-${ARCH}"; exit 1 ;;
         esac
         if [ "${VERSION}" = "latest" ]; then
-          VERSION=$(curl -sf https://api.github.com/repos/scopeon/scopeon/releases/latest | jq -r .tag_name | tr -d v)
+          VERSION=$(curl -sf https://api.github.com/repos/sorunokoe/Scopeon/releases/latest | jq -r .tag_name | tr -d v)
         fi
-        URL="https://github.com/scopeon/scopeon/releases/download/v${VERSION}/${ASSET}"
+        URL="https://github.com/sorunokoe/Scopeon/releases/download/v${VERSION}/${ASSET}"
         echo "Downloading ${URL}"
         curl -fsSL "${URL}" | tar -xz -C /usr/local/bin
         chmod +x /usr/local/bin/scopeon

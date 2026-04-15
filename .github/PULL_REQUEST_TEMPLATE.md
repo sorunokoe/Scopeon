@@ -24,7 +24,7 @@ All of the following jobs must be green (shown as **CI pass** ✅) before mergin
 | **Test (ubuntu)** | `cargo test --workspace --locked` |
 | **Test (macos)** | `cargo test --workspace --locked` |
 | **Test (windows)** | `cargo test --workspace --locked` |
-| **MSRV (1.86)** | Builds on the minimum supported Rust version |
+| **MSRV (1.88)** | Builds on the minimum supported Rust version |
 | **Release build** | `cargo build --release --locked` |
 | **Docs** | `cargo doc --no-deps` — no broken links or warnings |
 

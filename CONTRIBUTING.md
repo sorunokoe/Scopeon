@@ -35,7 +35,7 @@ Be kind. Assume good faith. Disagreements on technical direction are fine — pe
 
 | Tool | Version | Install |
 |---|---|---|
-| Rust | ≥ 1.86 | [rustup.rs](https://rustup.rs) |
+| Rust | ≥ 1.88 | [rustup.rs](https://rustup.rs) |
 | Git | any | [git-scm.com](https://git-scm.com) |
 
 macOS 12+ or Linux (glibc 2.31+). Windows builds via cross-compilation in CI — local dev on Windows is not yet validated.
@@ -43,7 +43,7 @@ macOS 12+ or Linux (glibc 2.31+). Windows builds via cross-compilation in CI —
 ### Clone and build
 
 ```bash
-git clone https://github.com/scopeon/scopeon
+git clone https://github.com/sorunokoe/Scopeon
 cd scopeon
 cargo build                    # dev build (fast)
 cargo build --release          # optimised build (used for releases)
@@ -322,7 +322,7 @@ The CI pipeline (defined in `.github/workflows/ci.yml`) runs automatically on ev
 | Format check | ✅ Yes |
 | Clippy | ✅ Yes |
 | Tests (Linux, macOS, Windows) | ✅ Yes |
-| MSRV build (Rust 1.86) | ✅ Yes |
+| MSRV build (Rust 1.88) | ✅ Yes |
 | Release build | ✅ Yes |
 | Docs (cargo doc) | ✅ Yes |
 | Security audit | Advisory only |
@@ -369,7 +369,7 @@ UI instead of configuring every individual job.
 
 ## Reporting bugs
 
-Open a [bug report](https://github.com/scopeon/scopeon/issues/new?template=bug_report.md) with:
+Open a [bug report](https://github.com/sorunokoe/Scopeon/issues/new?template=bug_report.md) with:
 
 - **Scopeon version**: `scopeon --version`
 - **OS**: `sw_vers` (macOS) or `uname -r` (Linux)
@@ -382,7 +382,7 @@ Open a [bug report](https://github.com/scopeon/scopeon/issues/new?template=bug_r
 
 ## Proposing features
 
-Open a [feature request](https://github.com/scopeon/scopeon/issues/new?template=feature_request.md) and describe:
+Open a [feature request](https://github.com/sorunokoe/Scopeon/issues/new?template=feature_request.md) and describe:
 
 - The problem you are solving
 - How you imagine the feature working

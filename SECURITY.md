@@ -13,7 +13,7 @@
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
 
-Report via **[GitHub private security advisory](https://github.com/scopeon/scopeon/security/advisories/new)** (preferred) or email **security@scopeon.dev** with:
+Report via **[GitHub private security advisory](https://github.com/sorunokoe/Scopeon/security/advisories/new)** (preferred) or email **security@scopeon.dev** with:
 
 - A description of the vulnerability and its impact
 - Steps to reproduce or a proof-of-concept
