@@ -61,28 +61,21 @@
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td align="center">
-      <img src="assets/1-sessions.png" alt="Sessions tab" width="440"/><br/>
-      <sub><b>Sessions</b> — full session list with per-turn cost, cache %, MCP call count</sub>
-    </td>
-    <td align="center">
-      <img src="assets/2-insights.png" alt="Insights tab" width="440"/><br/>
-      <sub><b>Insights</b> — health score, waste signals, cache ROI &amp; optimization tips</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="assets/3-budget.png" alt="Budget tab" width="440"/><br/>
-      <sub><b>Budget</b> — daily/weekly/monthly spend, by model, by project, 14-day chart</sub>
-    </td>
-    <td align="center">
-      <img src="assets/4-providers.png" alt="Providers tab" width="440"/><br/>
-      <sub><b>Providers</b> — auto-detected agents with data path &amp; session stats</sub>
-    </td>
-  </tr>
-</table>
+**Sessions** — full session list with per-turn cost, cache %, MCP call count
+
+![Sessions](assets/1-sessions.png)
+
+**Insights** — health score, waste signals, cache ROI & optimization tips
+
+![Insights](assets/2-insights.png)
+
+**Budget** — daily/weekly/monthly spend, by model, by project, 14-day chart
+
+![Budget](assets/3-budget.png)
+
+**Providers** — auto-detected agents with data path & session stats
+
+![Providers](assets/4-providers.png)
 
 ---
 
