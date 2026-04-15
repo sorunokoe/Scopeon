@@ -1,0 +1,68 @@
+# Stale bot — automatically marks and closes inactive issues and PRs.
+#
+# Timeline:
+#   Issues:  warn after 60 days idle → close after 7 more days
+#   PRs:     warn after 30 days idle → close after 7 more days
+#
+# Exemptions: any issue/PR labelled "pinned", "security", or "good first issue"
+# is never marked stale.
+
+name: Stale
+
+on:
+  schedule:
+    # Run at 01:00 UTC every day.
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    name: Mark and close stale items
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          # ── Issues ──────────────────────────────────────────────────────────
+          days-before-issue-stale: 60
+          days-before-issue-close: 7
+          stale-issue-label: stale
+          stale-issue-message: >
+            This issue has been inactive for 60 days. It will be closed in 7 days
+            unless there is new activity. If this is still relevant, please leave a
+            comment or remove the **stale** label. Thank you for your patience! 🙏
+          close-issue-message: >
+            Closing this issue due to inactivity. If you believe it is still valid,
+            please open a new issue and link back to this one.
+          close-issue-reason: not_planned
+
+          # ── Pull requests ────────────────────────────────────────────────────
+          days-before-pr-stale: 30
+          days-before-pr-close: 7
+          stale-pr-label: stale
+          stale-pr-message: >
+            This pull request has been inactive for 30 days. It will be closed in 7
+            days unless there is new activity. If you are still working on this, please
+            push a commit or leave a comment. If you need help getting it over the line,
+            ping a maintainer — we are happy to assist! 🚀
+          close-pr-message: >
+            Closing this pull request due to inactivity. If you would like to continue
+            this work, please open a new PR. Thank you for your contribution!
+
+          # ── Exemptions ───────────────────────────────────────────────────────
+          exempt-issue-labels: "pinned,security,good first issue,help wanted"
+          exempt-pr-labels: "pinned,security,dependencies"
+
+          # Labels to exempt from ever going stale (regex on label names).
+          any-of-labels: ""
+
+          # Do not mark items in draft PRs as stale.
+          exempt-draft-pr: true
+
+          # Only process this many items per run (avoids rate-limit spikes).
+          operations-per-run: 100

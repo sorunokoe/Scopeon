@@ -1,0 +1,15 @@
+# clippy.toml — workspace-level Clippy configuration
+#
+# See: https://rust-lang.github.io/rust-clippy/stable/index.html
+#
+# These settings apply to `cargo clippy --workspace`. Individual crates can
+# override them with #[allow(clippy::...)] only where justified with a comment.
+
+# Pedantic threshold: cognitive complexity limit (default 25).
+cognitive-complexity-threshold = 30
+
+# Avoid false positives from long match chains in TUI rendering code.
+too-many-arguments-threshold = 8
+
+# Warn when a type has more than N fields (helps catch bloated structs).
+struct-field-name-threshold = 6

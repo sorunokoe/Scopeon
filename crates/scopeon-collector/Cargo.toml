@@ -1,0 +1,23 @@
+[package]
+name = "scopeon-collector"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Claude Code JSONL log parser and FSEvents file watcher for Scopeon."
+
+[dependencies]
+scopeon-core = { path = "../scopeon-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+notify = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+rusqlite = { workspace = true }
+dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

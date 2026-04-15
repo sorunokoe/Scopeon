@@ -1,0 +1,44 @@
+# Dependabot — automatic dependency update PRs
+#
+# Keeps Cargo dependencies and GitHub Actions versions current.
+# PRs are opened weekly; Cargo updates are grouped into one PR to reduce noise.
+#
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+
+version: 2
+updates:
+  # ── Rust / Cargo ─────────────────────────────────────────────────────────────
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: UTC
+    # Group all Cargo updates into a single PR to keep the PR list manageable.
+    groups:
+      cargo-all:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: "chore(deps)"
+    reviewers: []  # rely on CODEOWNERS
+
+  # ── GitHub Actions ────────────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:30"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "chore(ci)"

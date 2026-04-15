@@ -1,0 +1,19 @@
+# Maintainer: Scopeon Contributors <hello@scopeon.dev>
+pkgname=scopeon-bin
+pkgver=0.6.0
+pkgrel=1
+pkgdesc="AI context observability for Claude Code, Codex, Cursor, and every LLM coding tool"
+arch=('x86_64' 'aarch64')
+url="https://github.com/scopeon/scopeon"
+license=('MIT' 'Apache')
+provides=('scopeon')
+conflicts=('scopeon')
+
+source_x86_64=("${pkgname}-${pkgver}-x86_64.tar.gz::https://github.com/scopeon/scopeon/releases/download/v${pkgver}/scopeon-x86_64-unknown-linux-musl.tar.gz")
+source_aarch64=("${pkgname}-${pkgver}-aarch64.tar.gz::https://github.com/scopeon/scopeon/releases/download/v${pkgver}/scopeon-aarch64-unknown-linux-musl.tar.gz")
+sha256sums_x86_64=('PLACEHOLDER_X86_64')
+sha256sums_aarch64=('PLACEHOLDER_AARCH64')
+
+package() {
+    install -Dm755 scopeon "${pkgdir}/usr/bin/scopeon"
+}

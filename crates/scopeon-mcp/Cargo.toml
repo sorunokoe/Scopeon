@@ -1,0 +1,18 @@
+[package]
+name = "scopeon-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP (Model Context Protocol) server exposing token usage tools to Claude Code."
+
+[dependencies]
+scopeon-core    = { path = "../scopeon-core" }
+scopeon-metrics = { path = "../scopeon-metrics" }
+tokio     = { workspace = true }
+serde     = { workspace = true }
+serde_json = { workspace = true }
+anyhow    = { workspace = true }
+tracing   = { workspace = true }
+chrono    = { workspace = true }

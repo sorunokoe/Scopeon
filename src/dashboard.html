@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scopeon — AI Context Observatory</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #21262d;
+    --border: #30363d; --text: #c9d1d9; --dim: #8b949e;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149;
+    --blue: #58a6ff; --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; }
+  header { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 18px; font-weight: 700; color: var(--blue); }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 12px; background: var(--bg3); color: var(--dim); border: 1px solid var(--border); }
+  #conn-status { margin-left: auto; font-size: 11px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  .dot.green { background: var(--green); } .dot.red { background: var(--red); } .dot.yellow { background: var(--yellow); animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  main { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; padding: 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 600px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); margin-bottom: 12px; }
+  .big-num { font-size: 32px; font-weight: 700; color: var(--text); }
+  .sub { font-size: 11px; color: var(--dim); margin-top: 4px; }
+  .gauge-wrap { margin-top: 10px; }
+  .gauge-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+  .gauge-track { height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; }
+  .gauge-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease, background 0.3s; }
+  .gauge-fill.green { background: var(--green); }
+  .gauge-fill.yellow { background: var(--yellow); }
+  .gauge-fill.red { background: var(--red); }
+  .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--dim); }
+  .stat-val { font-weight: 600; }
+  .alert-banner { display: none; margin: 0 20px; padding: 10px 16px; border-radius: 6px; font-size: 12px; border-left: 4px solid; }
+  .alert-banner.warning { background: #2d2001; border-color: var(--yellow); color: var(--yellow); display: block; }
+  .alert-banner.critical { background: #2d0101; border-color: var(--red); color: var(--red); display: block; }
+  .alert-banner.info { background: #011d2d; border-color: var(--blue); color: var(--blue); display: block; }
+  .history-bars { display: flex; align-items: flex-end; gap: 3px; height: 60px; margin-top: 8px; }
+  .history-bar { flex: 1; background: var(--blue); border-radius: 2px 2px 0 0; min-height: 2px; opacity: 0.7; transition: height 0.4s ease; }
+  .history-bar:hover { opacity: 1; }
+  footer { padding: 12px 20px; border-top: 1px solid var(--border); color: var(--dim); font-size: 11px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔬 Scopeon</h1>
+  <span class="tag">AI Context Observatory</span>
+  <span class="tag" id="version-tag">v0.0.0</span>
+  <span id="conn-status"><span class="dot yellow"></span>Connecting…</span>
+</header>
+
+<div id="alert-area"></div>
+
+<main>
+  <div class="card">
+    <h2>Context Pressure</h2>
+    <div class="big-num" id="ctx-pct">—</div>
+    <div class="sub" id="ctx-model">—</div>
+    <div class="gauge-wrap">
+      <div class="gauge-label"><span>0%</span><span id="ctx-remaining">— tokens left</span><span>100%</span></div>
+      <div class="gauge-track"><div class="gauge-fill green" id="ctx-gauge" style="width:0%"></div></div>
+    </div>
+    <div class="stat-row" style="margin-top:10px"><span class="stat-label">Predicted turns left</span><span class="stat-val" id="ctx-turns">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Daily Cost</h2>
+    <div class="big-num" id="cost-today">$—</div>
+    <div class="sub" id="cost-sub">—</div>
+    <div class="gauge-wrap">
+      <div class="gauge-label"><span>Daily budget</span><span id="cost-pct-label">—</span></div>
+      <div class="gauge-track"><div class="gauge-fill green" id="cost-gauge" style="width:0%"></div></div>
+    </div>
+    <div class="stat-row" style="margin-top:10px"><span class="stat-label">Weekly / Monthly</span><span class="stat-val" id="cost-weekly-monthly">— / —</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Cache Efficiency</h2>
+    <div class="big-num" id="cache-hit">—%</div>
+    <div class="sub" id="cache-savings">—</div>
+    <div class="gauge-wrap">
+      <div class="gauge-label"><span>Hit rate</span><span id="cache-pct-label">—</span></div>
+      <div class="gauge-track"><div class="gauge-fill green" id="cache-gauge" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Token Usage</h2>
+    <div class="stat-row"><span class="stat-label">Input tokens</span><span class="stat-val" id="tok-input">—</span></div>
+    <div class="stat-row"><span class="stat-label">Output tokens</span><span class="stat-val" id="tok-output">—</span></div>
+    <div class="stat-row"><span class="stat-label">Cache read</span><span class="stat-val" id="tok-cache-read">—</span></div>
+    <div class="stat-row"><span class="stat-label">Thinking tokens</span><span class="stat-val" id="tok-thinking">—</span></div>
+    <div class="stat-row"><span class="stat-label">Total sessions</span><span class="stat-val" id="tok-sessions">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>30-Day Cost History</h2>
+    <div class="history-bars" id="history-bars"></div>
+    <div class="sub" style="margin-top:8px">Last 30 days · hover for details</div>
+  </div>
+
+  <div class="card">
+    <h2>Live Stats</h2>
+    <div class="stat-row"><span class="stat-label">Total turns</span><span class="stat-val" id="stat-turns">—</span></div>
+    <div class="stat-row"><span class="stat-label">Estimated cost</span><span class="stat-val" id="stat-cost">—</span></div>
+    <div class="stat-row"><span class="stat-label">Cache savings</span><span class="stat-val" id="stat-savings">—</span></div>
+    <div class="stat-row"><span class="stat-label">Last refresh</span><span class="stat-val" id="stat-refresh">—</span></div>
+  </div>
+</main>
+
+<footer>Scopeon · open source · <a href="https://github.com/scopeon/scopeon" style="color:var(--blue)">github.com/scopeon/scopeon</a></footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
+const fmtCost = v => v >= 0.01 ? '$'+v.toFixed(2) : v > 0 ? '$'+v.toFixed(4) : '$0.00';
+
+function setGauge(id, pct, thresholds) {
+  const el = $(id);
+  const w = Math.min(100, Math.max(0, pct));
+  el.style.width = w + '%';
+  el.className = 'gauge-fill ' + (pct >= (thresholds[1]||90) ? 'red' : pct >= (thresholds[0]||70) ? 'yellow' : 'green');
+}
+
+function showAlert(type, msg) {
+  const area = $('alert-area');
+  const existing = area.querySelector('.alert-banner');
+  if (existing) existing.remove();
+  const el = document.createElement('div');
+  el.className = 'alert-banner ' + (type === 'context_crisis' || type === 'budget_warning' ? 'critical' : type === 'compaction_detected' ? 'info' : 'warning');
+  el.textContent = '⚠ ' + msg;
+  area.appendChild(el);
+  setTimeout(() => el.remove(), 30000);
+}
+
+function applySnapshot(data) {
+  // Context pressure
+  const ctx = data.context_pressure || {};
+  const fill = ctx.fill_pct || 0;
+  $('ctx-pct').textContent = fill.toFixed(1) + '%';
+  $('ctx-model').textContent = ctx.model || '—';
+  $('ctx-remaining').textContent = fmt(ctx.tokens_remaining || 0) + ' left';
+  $('ctx-turns').textContent = ctx.predicted_turns_remaining != null ? '~' + ctx.predicted_turns_remaining : '—';
+  setGauge('ctx-gauge', fill, [80, 95]);
+
+  // Budget
+  const bud = data.budget_status || {};
+  const daily = bud.daily_spent || 0;
+  const dlim = bud.daily_limit || 0;
+  const dpct = dlim > 0 ? daily / dlim * 100 : 0;
+  $('cost-today').textContent = fmtCost(daily);
+  $('cost-sub').textContent = dlim > 0 ? 'limit ' + fmtCost(dlim) : 'no limit set';
+  $('cost-pct-label').textContent = dlim > 0 ? dpct.toFixed(0) + '%' : 'unlimited';
+  $('cost-weekly-monthly').textContent = fmtCost(bud.weekly_spent||0) + ' / ' + fmtCost(bud.monthly_spent||0);
+  setGauge('cost-gauge', dpct, [80, 100]);
+
+  // Cache
+  const cache = data.cache_efficiency || {};
+  const hr = (cache.cache_hit_rate || 0) * 100;
+  $('cache-hit').textContent = hr.toFixed(1) + '%';
+  $('cache-savings').textContent = 'saved ' + fmtCost(cache.cache_savings_usd || 0);
+  $('cache-pct-label').textContent = hr.toFixed(1) + '%';
+  setGauge('cache-gauge', hr, [20, 10]);  // inverted: low hit rate is bad
+
+  // Token usage
+  const tok = data.token_usage || {};
+  $('tok-input').textContent = fmt(tok.total_input_tokens || 0);
+  $('tok-output').textContent = fmt(tok.total_output_tokens || 0);
+  $('tok-cache-read').textContent = fmt(tok.total_cache_read_tokens || 0);
+  $('tok-thinking').textContent = fmt(tok.total_thinking_tokens || 0);
+  $('tok-sessions').textContent = tok.total_sessions || 0;
+
+  // History bars
+  const hist = data.history_30d || [];
+  if (hist.length > 0) {
+    const max = Math.max(...hist.map(d => d.estimated_cost_usd || 0), 0.0001);
+    const bars = $('history-bars');
+    bars.innerHTML = '';
+    hist.slice().reverse().forEach(d => {
+      const bar = document.createElement('div');
+      bar.className = 'history-bar';
+      const pct = ((d.estimated_cost_usd || 0) / max * 100).toFixed(1);
+      bar.style.height = pct + '%';
+      bar.title = (d.date || '') + ': ' + fmtCost(d.estimated_cost_usd || 0);
+      bars.appendChild(bar);
+    });
+  }
+
+  // Live stats
+  $('stat-turns').textContent = fmt(tok.total_turns || 0);
+  $('stat-cost').textContent = fmtCost(tok.estimated_cost_usd || 0);
+  $('stat-savings').textContent = fmtCost(cache.cache_savings_usd || 0);
+  $('stat-refresh').textContent = new Date().toLocaleTimeString();
+  $('version-tag').textContent = data.version || 'v?';
+}
+
+function connect() {
+  const wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  const ws = new WebSocket(wsProto + location.host + '/ws/v1/metrics');
+  const status = $('conn-status');
+
+  ws.onopen = () => { status.innerHTML = '<span class="dot green"></span>Live'; };
+  ws.onclose = () => {
+    status.innerHTML = '<span class="dot red"></span>Disconnected — reconnecting…';
+    setTimeout(connect, 3000);
+  };
+  ws.onerror = () => { status.innerHTML = '<span class="dot red"></span>Error'; };
+
+  ws.onmessage = e => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'snapshot') applySnapshot(msg.data);
+      else if (msg.type === 'alert') showAlert(msg.alert_type, msg.message);
+    } catch (_) {}
+  };
+}
+
+connect();
+</script>
+</body>
+</html>

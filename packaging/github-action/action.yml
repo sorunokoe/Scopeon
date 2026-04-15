@@ -1,0 +1,83 @@
+name: scopeon CI cost gate
+description: >
+  Capture an AI cost snapshot or compare AI usage against a baseline.
+  Surfaces token cost, cache hit rate, and context fill % in your PR comments.
+
+inputs:
+  command:
+    description: "'snapshot' to save baseline, 'report' to compare and comment"
+    required: true
+    default: report
+  baseline:
+    description: Path to the baseline JSON snapshot (for 'report' command)
+    required: false
+    default: .scopeon-ci-snapshot.json
+  fail-on-cost-delta:
+    description: Fail if AI cost grew by more than this percentage vs baseline (e.g. 20)
+    required: false
+  version:
+    description: Scopeon version to install (default: latest)
+    required: false
+    default: latest
+
+outputs:
+  report:
+    description: Markdown report text (for 'report' command)
+    value: ${{ steps.run.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install scopeon
+      shell: bash
+      run: |
+        set -euo pipefail
+        VERSION="${{ inputs.version }}"
+        OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        ARCH="$(uname -m)"
+        case "${OS}-${ARCH}" in
+          linux-x86_64)    ASSET="scopeon-x86_64-unknown-linux-musl.tar.gz" ;;
+          linux-aarch64)   ASSET="scopeon-aarch64-unknown-linux-musl.tar.gz" ;;
+          darwin-x86_64)   ASSET="scopeon-x86_64-apple-darwin.tar.gz" ;;
+          darwin-arm64)    ASSET="scopeon-aarch64-apple-darwin.tar.gz" ;;
+          *)               echo "Unsupported platform: ${OS}-${ARCH}"; exit 1 ;;
+        esac
+        if [ "${VERSION}" = "latest" ]; then
+          VERSION=$(curl -sf https://api.github.com/repos/scopeon/scopeon/releases/latest | jq -r .tag_name | tr -d v)
+        fi
+        URL="https://github.com/scopeon/scopeon/releases/download/v${VERSION}/${ASSET}"
+        echo "Downloading ${URL}"
+        curl -fsSL "${URL}" | tar -xz -C /usr/local/bin
+        chmod +x /usr/local/bin/scopeon
+        scopeon --version
+
+    - name: Run scopeon ${{ inputs.command }}
+      id: run
+      shell: bash
+      run: |
+        set -euo pipefail
+        CMD="${{ inputs.command }}"
+        if [ "${CMD}" = "snapshot" ]; then
+          scopeon ci snapshot --output "${{ inputs.baseline }}"
+          echo "Snapshot saved to ${{ inputs.baseline }}"
+        elif [ "${CMD}" = "report" ]; then
+          EXTRA_ARGS=""
+          if [ -n "${{ inputs.fail-on-cost-delta }}" ]; then
+            EXTRA_ARGS="--fail-on-cost-delta ${{ inputs.fail-on-cost-delta }}"
+          fi
+          BASELINE_ARG=""
+          if [ -f "${{ inputs.baseline }}" ]; then
+            BASELINE_ARG="--baseline ${{ inputs.baseline }}"
+          fi
+          REPORT=$(scopeon ci report ${BASELINE_ARG} ${EXTRA_ARGS})
+          echo "${REPORT}"
+          # Make multi-line output available as a step output
+          {
+            echo 'report<<EOF'
+            echo "${REPORT}"
+            echo 'EOF'
+          } >> "${GITHUB_OUTPUT}"
+        else
+          echo "Unknown command: ${CMD}. Use 'snapshot' or 'report'."
+          exit 1
+        fi

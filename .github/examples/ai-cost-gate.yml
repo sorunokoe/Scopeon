@@ -1,0 +1,155 @@
+# AI Cost Gate — GitHub Actions Example
+#
+# This workflow demonstrates TRIZ Solution 5: moving AI cost from a personal
+# terminal metric to a team-visible GitHub PR comment, with optional CI gating.
+#
+# HOW IT WORKS:
+# 1. When code is pushed to `main`, Scopeon snapshots the current AI usage stats
+#    and saves them as a workflow artifact ("baseline").
+# 2. When a PR is opened/updated, Scopeon downloads the latest baseline artifact,
+#    runs `scopeon ci report`, and posts the Markdown table as a PR comment.
+# 3. Optionally, `--fail-on-cost-delta 100` blocks the PR if AI cost doubled.
+#
+# SETUP:
+# 1. Install Scopeon in CI: see the "Install Scopeon" step below.
+# 2. Add GITHUB_TOKEN permissions as shown (needed for PR comments).
+# 3. The AI log files (JSONL) must be accessible — either checked in or mounted.
+#    For most teams, the JSONL logs are NOT checked in. Instead, run your AI
+#    coding session locally, push, then use `scopeon ci report` as a local check.
+
+name: AI Cost Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write   # needed to post PR comments
+
+jobs:
+  # ── On main: capture the baseline AI usage snapshot ────────────────────────
+  ai-cost-snapshot:
+    name: Capture AI Cost Baseline
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Scopeon
+        run: |
+          # Option A: cargo-binstall (fastest, no compilation)
+          curl -L --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall scopeon --no-confirm
+          # Option B: build from source
+          # cargo install scopeon
+
+      - name: Capture baseline snapshot
+        run: scopeon ci snapshot --output baseline.json
+        # Note: this requires a scopeon.db with data. In CI, you can either:
+        # - Check in a pre-populated DB (for demo purposes)
+        # - Mount a persistent volume with the DB
+        # - Use `scopeon start --daemon` before running your AI sessions
+
+      - name: Upload baseline artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scopeon-baseline
+          path: baseline.json
+          # Keep baseline for 30 days (covers most PR lifetimes)
+          retention-days: 30
+
+  # ── On PRs: compare current stats to baseline and post as comment ──────────
+  ai-cost-report:
+    name: AI Cost Report
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Scopeon
+        run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall scopeon --no-confirm
+
+      - name: Download baseline artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: scopeon-baseline
+          # If no baseline exists yet (first PR), the report runs without comparison
+        continue-on-error: true
+
+      - name: Generate AI cost report
+        id: ai-report
+        run: |
+          # Generate the Markdown report (to a temp file, then read into $GITHUB_ENV)
+          if [ -f baseline.json ]; then
+            scopeon ci report \
+              --baseline baseline.json \
+              --fail-on-cost-delta 100 \
+              > report.md
+          else
+            scopeon ci report > report.md
+          fi
+          echo "Report generated."
+
+      - name: Post report as PR comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('report.md', 'utf8');
+            
+            // Find and update existing comment, or create new one
+            const marker = '<!-- scopeon-ai-cost-report -->';
+            const body = marker + '\n' + report;
+            
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const existing = comments.find(c => c.body.includes(marker));
+            
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+# ── Local usage (without CI) ────────────────────────────────────────────────
+# Run on your base branch:
+#   scopeon ci snapshot --output baseline.json
+#
+# After your AI coding session on the feature branch:
+#   scopeon ci report --baseline baseline.json
+#
+# Example output:
+#   ## 🔬 AI Cost Analysis
+#
+#   | Metric          | Baseline | Current  | Delta      |
+#   |-----------------|----------|----------|------------|
+#   | Total cost      | $0.8400  | $2.3100  | +175.0% 🔴 |
+#   | Cache hit rate  | 71.0%    | 23.0%    | -67.6% 🟡  |
+#   | Context peak    | 45.0%    | 88.0%    | +95.6% 🟡  |
+#   | Avg tokens/turn | 12400    | 34200    | +175.8% 🔴 |
+#   | Sessions        | 3        | 8        | —          |
+#   | Turns           | 47       | 112      | —          |
+#
+#   💡 Cold cache detected. Consider restructuring prompts...

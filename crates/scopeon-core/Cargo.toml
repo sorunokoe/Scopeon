@@ -1,0 +1,21 @@
+[package]
+name = "scopeon-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core data models, SQLite storage, and cost engine for Scopeon."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+rusqlite_migration = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }
+tracing = { workspace = true }
+toml = { workspace = true }
+url = { workspace = true }

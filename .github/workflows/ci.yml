@@ -1,0 +1,254 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Cancel in-flight runs for the same PR/branch to avoid wasting CI time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Skip draft PRs ────────────────────────────────────────────────────────────
+  # All subsequent jobs depend on this one. Draft PRs will skip CI entirely,
+  # saving runner minutes. CI re-runs automatically when "Ready for review" is clicked.
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        run: |
+          if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Draft PR — skipping CI. Click 'Ready for review' to trigger CI."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ── Fast checks (no heavy build) ─────────────────────────────────────────────
+  fmt:
+    name: Format check
+    needs: preflight
+    if: needs.preflight.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    needs: preflight
+    if: needs.preflight.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: clippy-
+      - name: cargo clippy -D warnings
+        run: cargo clippy --workspace --locked -- -D warnings
+
+  # ── Tests (cross-platform matrix) ────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }})
+    needs: [fmt, clippy]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: test-${{ runner.os }}-
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+  # ── MSRV gate ────────────────────────────────────────────────────────────────
+  msrv:
+    name: MSRV (1.86)
+    needs: [fmt, clippy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.86"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: msrv-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: msrv-
+      - name: Build on MSRV
+        run: cargo build --workspace --locked
+
+  # ── Release build (verify nothing breaks in --release) ───────────────────────
+  release-build:
+    name: Release build
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: release-
+      - name: cargo build --release
+        run: cargo build --release --locked
+
+  # ── Security audit ───────────────────────────────────────────────────────────
+  audit:
+    name: Security audit
+    needs: preflight
+    if: needs.preflight.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --quiet
+      - name: cargo audit
+        run: cargo audit
+
+  # ── Dependency license + ban check ───────────────────────────────────────────
+  deny:
+    name: Dependency check (cargo-deny)
+    needs: preflight
+    if: needs.preflight.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # ── Documentation ────────────────────────────────────────────────────────────
+  docs:
+    name: Docs (cargo doc)
+    needs: [fmt, clippy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: docs-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: docs-
+      - name: cargo doc (no warnings)
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  # ── Test coverage ─────────────────────────────────────────────────────────────
+  # Uses cargo-llvm-cov to compute line coverage and posts a summary to the
+  # job output. Does NOT block merge (advisory only) — coverage is a signal,
+  # not a hard gate, until a baseline is established.
+  coverage:
+    name: Coverage
+    needs: [fmt, clippy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: coverage-
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked --quiet
+      - name: Generate coverage report
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path lcov.info
+          cargo llvm-cov --workspace --summary-only 2>&1 | tee coverage-summary.txt
+      - name: Upload coverage to job summary
+        run: |
+          echo "## Test Coverage" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat coverage-summary.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Upload LCOV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-report
+          path: lcov.info
+          retention-days: 30
+
+  # ── Required check summary (branch protection target) ────────────────────────
+  #
+  # Add "CI pass" as the ONLY required status check in GitHub branch protection.
+  # This single job becomes green only when ALL mandatory jobs succeed, giving you
+  # one clean name to put in Settings → Branches → Require status checks.
+  #
+  # Jobs NOT included in ci-pass (advisory only, never block merge):
+  #   - audit      (runs independently, advisory)
+  #   - deny       (runs independently, advisory)
+  #   - coverage   (advisory — no hard coverage gate yet)
+  #
+  # To change what blocks merge: add/remove from the `needs` list below.
+  ci-pass:
+    name: CI pass
+    if: always()
+    needs: [fmt, clippy, test, msrv, release-build, docs]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all required jobs passed
+        run: |
+          results='${{ toJson(needs.*.result) }}'
+          echo "Job results: $results"
+          if echo "$results" | grep -qE '"failure"|"cancelled"'; then
+            echo "❌ One or more required CI jobs failed or were cancelled."
+            exit 1
+          fi
+          echo "✅ All required CI jobs passed."
+

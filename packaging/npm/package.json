@@ -1,0 +1,15 @@
+{
+  "name": "scopeon",
+  "version": "0.6.0",
+  "description": "AI context observability for Claude Code, Codex, Cursor, and every LLM coding tool",
+  "keywords": ["ai", "claude", "codex", "cursor", "observability", "tokens", "cost", "mcp"],
+  "homepage": "https://github.com/scopeon/scopeon",
+  "repository": { "type": "git", "url": "https://github.com/scopeon/scopeon.git" },
+  "license": "MIT OR Apache-2.0",
+  "main": "index.js",
+  "bin": { "scopeon": "bin/scopeon" },
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "engines": { "node": ">=16" }
+}

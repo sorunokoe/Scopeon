@@ -1,0 +1,21 @@
+edition = "2021"
+max_width = 100
+use_small_heuristics = "Default"
+
+# Imports
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+
+# Expressions
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# Structs / enums
+struct_field_align_threshold = 0
+enum_discrim_align_threshold = 0
+
+# Match
+match_block_trailing_comma = true
+
+# Trailing comma in function args / generics
+trailing_comma = "Vertical"

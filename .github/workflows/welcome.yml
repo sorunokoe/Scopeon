@@ -1,0 +1,54 @@
+# Welcome workflow — greet first-time contributors on their first issue or PR.
+#
+# Sends a friendly message to:
+#   - First-time issue authors (first-issue)
+#   - First-time PR authors (first-pr)
+#
+# Docs: https://github.com/actions/first-interaction
+
+name: Welcome
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  welcome:
+    name: Greet first-time contributors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/first-interaction@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          issue-message: |
+            👋 Welcome, and thanks for opening your first issue on Scopeon!
+
+            A few things that will help us help you faster:
+            - Include your **Scopeon version** (`scopeon --version`)
+            - Include your **OS** and **AI provider** (Claude Code, Copilot CLI, etc.)
+            - Paste the relevant **log output** (`RUST_LOG=scopeon=debug scopeon start`)
+
+            We usually respond within a couple of days. In the meantime, you might find
+            answers in the [discussions](https://github.com/scopeon/scopeon/discussions)
+            or the [README](https://github.com/scopeon/scopeon/blob/main/README.md).
+
+          pr-message: |
+            👋 Thanks for your first pull request to Scopeon! 🎉
+
+            Before we review, please make sure the CI checks below pass:
+            - `cargo fmt --all -- --check` — formatting
+            - `cargo clippy --workspace -- -D warnings` — linting
+            - `cargo test --workspace` — all 145 tests must be green
+
+            Or simply run `make check` locally to verify everything at once.
+
+            We review PRs in order of readiness (all CI green + filled-out description).
+            If you get stuck, feel free to ask for help in a comment — we are happy to
+            guide you through the process. Thank you for contributing! 🚀

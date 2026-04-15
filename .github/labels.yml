@@ -1,0 +1,102 @@
+# Label definitions for the Scopeon repository.
+# Applied by the labeler workflow (.github/workflows/labeler.yml).
+# Can also be synced with `gh label` CLI or the github-label-sync tool.
+
+# ── Type labels ──────────────────────────────────────────────────────────────
+- name: bug
+  color: "d73a4a"
+  description: Something isn't working
+
+- name: enhancement
+  color: "a2eeef"
+  description: New feature or improvement
+
+- name: documentation
+  color: "0075ca"
+  description: Improvements or additions to documentation
+
+- name: question
+  color: "d876e3"
+  description: Further information requested
+
+- name: "good first issue"
+  color: "7057ff"
+  description: Good for newcomers
+
+- name: "help wanted"
+  color: "008672"
+  description: Extra attention is needed
+
+- name: "won't fix"
+  color: "ffffff"
+  description: This will not be worked on
+
+- name: duplicate
+  color: "cfd3d7"
+  description: This issue or pull request already exists
+
+- name: invalid
+  color: "e4e669"
+  description: This doesn't seem right
+
+# ── Area labels ───────────────────────────────────────────────────────────────
+- name: "area: core"
+  color: "0052cc"
+  description: Changes to scopeon-core (models, DB, cost engine)
+
+- name: "area: collector"
+  color: "1d76db"
+  description: Changes to scopeon-collector (parsers, watcher, providers)
+
+- name: "area: tui"
+  color: "5319e7"
+  description: Changes to scopeon-tui (Ratatui dashboard)
+
+- name: "area: mcp"
+  color: "006b75"
+  description: Changes to scopeon-mcp (MCP server, tools)
+
+- name: "area: metrics"
+  color: "0e8a16"
+  description: Changes to scopeon-metrics (health, waste, suggestions)
+
+- name: "area: cli"
+  color: "e4e669"
+  description: Changes to the CLI binary (serve, ci, digest, shell-hook)
+
+- name: "area: ci"
+  color: "f9d0c4"
+  description: Changes to CI/CD workflows
+
+- name: "area: provider"
+  color: "c5def5"
+  description: New or updated AI provider support
+
+# ── Process labels ────────────────────────────────────────────────────────────
+- name: dependencies
+  color: "0366d6"
+  description: Pull requests that update a dependency
+
+- name: rust
+  color: "f74c00"
+  description: Rust / Cargo related
+
+- name: ci
+  color: "f9d0c4"
+  description: CI/CD related
+
+- name: "breaking change"
+  color: "b60205"
+  description: Introduces a breaking API or behaviour change
+
+- name: performance
+  color: "84b6eb"
+  description: Improves performance
+
+- name: security
+  color: "e11d48"
+  description: Security fix or security-related change
+
+- name: stale
+  color: "ededed"
+  description: Issue or PR has been inactive and may be closed

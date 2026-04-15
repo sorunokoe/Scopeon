@@ -1,0 +1,31 @@
+# CODEOWNERS — automatic reviewer assignment for pull requests.
+#
+# Syntax: <pattern> <@owner> [<@owner2> ...]
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# The @scopeon/maintainers team (or a named maintainer) is auto-requested as reviewer
+# for every PR. More specific rules below override the catch-all for targeted review.
+
+# ── Default: all files ───────────────────────────────────────────────────────
+*                                       @scopeon/maintainers
+
+# ── Core data layer (schema changes need careful review) ─────────────────────
+crates/scopeon-core/src/db.rs           @scopeon/maintainers
+crates/scopeon-core/src/models.rs       @scopeon/maintainers
+
+# ── Pricing table (needs verification against official sources) ───────────────
+crates/scopeon-core/src/cost.rs         @scopeon/maintainers
+
+# ── Security-sensitive files ─────────────────────────────────────────────────
+SECURITY.md                             @scopeon/maintainers
+.github/workflows/release.yml           @scopeon/maintainers
+install.sh                              @scopeon/maintainers
+packaging/                              @scopeon/maintainers
+
+# ── CI / DevOps ──────────────────────────────────────────────────────────────
+.github/                                @scopeon/maintainers
+Cargo.toml                              @scopeon/maintainers
+deny.toml                               @scopeon/maintainers
+
+# ── Documentation (lighter review, welcome from any contributor) ──────────────
+*.md                                    @scopeon/maintainers

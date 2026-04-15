@@ -1,0 +1,182 @@
+# Release workflow — builds pre-compiled binaries for all platforms on version tags.
+#
+# Resolves TRIZ TC-D1 (Install Simplicity vs. Feature Richness):
+# The build complexity exists ONCE here in CI; users never need the Rust toolchain.
+#
+# Triggers: Push a tag matching `v*` (e.g. `git tag v0.3.0 && git push --tags`)
+#
+# Artifacts produced per platform:
+#   scopeon-v0.3.0-aarch64-apple-darwin.tar.gz
+#   scopeon-v0.3.0-x86_64-apple-darwin.tar.gz
+#   scopeon-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+#   scopeon-v0.3.0-x86_64-pc-windows-msvc.zip
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed to create GitHub Releases and upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS ARM64 (Apple Silicon — M1/M2/M3/M4)
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            archive: tar.gz
+
+          # macOS x86_64 (Intel)
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            archive: tar.gz
+
+          # Linux x86_64 (most CI runners, most servers)
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            archive: tar.gz
+
+          # Linux ARM64 (Raspberry Pi, AWS Graviton, etc.)
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: true
+            archive: tar.gz
+
+          # Windows x86_64
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Install cross (for cross-compilation)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (native)
+        if: '!matrix.cross'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross-compiled)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Determine binary name
+        id: bin
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            echo "name=scopeon.exe" >> $GITHUB_OUTPUT
+          else
+            echo "name=scopeon" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          TARGET="${{ matrix.target }}"
+          ARCHIVE="scopeon-${VERSION}-${TARGET}.tar.gz"
+          cp "target/$TARGET/release/scopeon" scopeon
+          tar czf "$ARCHIVE" scopeon README.md LICENSE-MIT LICENSE-APACHE
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ github.ref_name }}"
+          $TARGET = "${{ matrix.target }}"
+          $ARCHIVE = "scopeon-${VERSION}-${TARGET}.zip"
+          Copy-Item "target/$TARGET/release/scopeon.exe" scopeon.exe
+          Compress-Archive -Path scopeon.exe, README.md, LICENSE-MIT, LICENSE-APACHE -DestinationPath $ARCHIVE
+          "ARCHIVE=$ARCHIVE" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### Fastest: cargo-binstall (no compilation required)
+            ```sh
+            cargo binstall scopeon
+            ```
+
+            ### curl installer
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
+            ```
+
+            ### cargo (from source)
+            ```sh
+            cargo install scopeon
+            ```
+
+            ### Manual download
+            Download the binary for your platform from the assets below:
+            - **macOS Apple Silicon**: `scopeon-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz`
+            - **macOS Intel**: `scopeon-${{ github.ref_name }}-x86_64-apple-darwin.tar.gz`
+            - **Linux x86_64**: `scopeon-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz`
+            - **Linux ARM64**: `scopeon-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz`
+            - **Windows**: `scopeon-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip`
+
+            Then run `scopeon init` to configure Claude Code integration.

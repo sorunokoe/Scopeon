@@ -1,0 +1,51 @@
+{
+  "name": "scopeon-vscode",
+  "displayName": "Scopeon — AI Context Observability",
+  "description": "Live AI cost, cache hit rate, and context fill % in your VS Code status bar",
+  "version": "0.6.0",
+  "publisher": "scopeon",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/scopeon/scopeon.git" },
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "keywords": ["ai", "claude", "claude-code", "codex", "cursor", "tokens", "cost", "observability"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "scopeon.openDashboard",
+        "title": "Scopeon: Open Dashboard"
+      },
+      {
+        "command": "scopeon.openDigest",
+        "title": "Scopeon: View Digest Report"
+      }
+    ],
+    "configuration": {
+      "title": "Scopeon",
+      "properties": {
+        "scopeon.port": {
+          "type": "number",
+          "default": 7771,
+          "description": "Port where the Scopeon HTTP API is listening (scopeon serve)"
+        },
+        "scopeon.pollIntervalMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "How often to poll the Scopeon API for updated stats (milliseconds)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}

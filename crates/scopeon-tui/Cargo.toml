@@ -1,0 +1,21 @@
+[package]
+name = "scopeon-tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Ratatui terminal dashboard for Scopeon — Live, History, Distribution, Cache tabs."
+
+[dependencies]
+scopeon-core = { path = "../scopeon-core" }
+scopeon-metrics = { path = "../scopeon-metrics" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+unicode-width = { workspace = true }
+dirs = { workspace = true }
+arboard = "3"

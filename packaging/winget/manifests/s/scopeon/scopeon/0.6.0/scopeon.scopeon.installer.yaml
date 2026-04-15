@@ -1,0 +1,13 @@
+PackageIdentifier: scopeon.scopeon
+PackageVersion: 0.6.0
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/scopeon/scopeon/releases/download/v0.6.0/scopeon-x86_64-pc-windows-msvc.zip
+    InstallerSha256: PLACEHOLDER_WIN64_SHA256
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: scopeon.exe
+        PortableCommandAlias: scopeon
+ManifestType: installer
+ManifestVersion: 1.4.0

@@ -1,0 +1,51 @@
+# Labeler configuration — maps file path patterns to PR labels.
+# Used by .github/workflows/labeler.yml (actions/labeler@v5).
+# Docs: https://github.com/actions/labeler
+
+"area: core":
+  - changed-files:
+    - any-glob-to-any-file: "crates/scopeon-core/**"
+
+"area: collector":
+  - changed-files:
+    - any-glob-to-any-file: "crates/scopeon-collector/**"
+
+"area: tui":
+  - changed-files:
+    - any-glob-to-any-file: "crates/scopeon-tui/**"
+
+"area: mcp":
+  - changed-files:
+    - any-glob-to-any-file: "crates/scopeon-mcp/**"
+
+"area: metrics":
+  - changed-files:
+    - any-glob-to-any-file: "crates/scopeon-metrics/**"
+
+"area: cli":
+  - changed-files:
+    - any-glob-to-any-file: "src/**"
+
+"area: ci":
+  - changed-files:
+    - any-glob-to-any-file: ".github/**"
+    - any-glob-to-any-file: "Makefile"
+    - any-glob-to-any-file: "deny.toml"
+    - any-glob-to-any-file: "clippy.toml"
+    - any-glob-to-any-file: "rustfmt.toml"
+
+"area: provider":
+  - changed-files:
+    - any-glob-to-any-file: "crates/scopeon-collector/src/providers/**"
+
+documentation:
+  - changed-files:
+    - any-glob-to-any-file: "*.md"
+    - any-glob-to-any-file: "docs/**"
+    - any-glob-to-any-file: "editors/**"
+
+dependencies:
+  - changed-files:
+    - any-glob-to-any-file: "**/Cargo.toml"
+    - any-glob-to-any-file: "Cargo.lock"
+    - any-glob-to-any-file: ".github/dependabot.yml"

@@ -1,0 +1,105 @@
+name: Monthly Pricing Review Reminder
+
+# Runs on the 1st of every month at 09:00 UTC.
+# Opens a GitHub issue asking maintainers to verify the built-in pricing table.
+on:
+  schedule:
+    - cron: '0 9 1 * *'
+  workflow_dispatch: {}   # Allow manual trigger for testing
+
+jobs:
+  pricing-tests:
+    name: Verify pricing invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run pricing tests
+        run: cargo test --workspace --test-threads=1 -- cost:: 2>&1
+
+  open-reminder-issue:
+    name: Open monthly reminder issue
+    runs-on: ubuntu-latest
+    needs: pricing-tests
+    # Only open the issue on the scheduled run (not manual dispatch) and only if tests passed.
+    if: github.event_name == 'schedule'
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine current month label
+        id: month
+        run: echo "label=pricing-review-$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Check if issue already exists this month
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          count=$(gh issue list \
+            --label "${{ steps.month.outputs.label }}" \
+            --state open \
+            --json number \
+            --jq 'length')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Create label if absent
+        if: steps.existing.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "${{ steps.month.outputs.label }}" \
+            --color "FFA500" \
+            --description "Monthly pricing review reminder" \
+            2>/dev/null || true   # ignore "already exists" error
+
+      - name: Open reminder issue
+        if: steps.existing.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERIFIED_DATE=$(grep -o 'PRICING_VERIFIED_DATE.*"[^"]*"' \
+            crates/scopeon-core/src/cost.rs | grep -o '"[^"]*"' | tr -d '"')
+          TODAY=$(date +%Y-%m-%d)
+
+          gh issue create \
+            --title "🔔 Monthly pricing review: check built-in table (${TODAY})" \
+            --label "${{ steps.month.outputs.label }}" \
+            --body "## Monthly Pricing Review
+
+          The built-in pricing table in \`crates/scopeon-core/src/cost.rs\` was last
+          verified on **${VERIFIED_DATE}** (today is **${TODAY}**).
+
+          ### Checklist
+
+          - [ ] Check [Anthropic pricing](https://www.anthropic.com/pricing) for Claude model updates
+          - [ ] Check [OpenAI pricing](https://openai.com/api/pricing/) for GPT model updates
+          - [ ] Check [Google AI pricing](https://ai.google.dev/pricing) for Gemini model updates
+          - [ ] Update any stale entries in \`PRICING\` slice in \`cost.rs\`
+          - [ ] Update \`PRICING_VERIFIED_DATE\` to today's date
+          - [ ] Run \`cargo test --workspace\` and verify all tests pass
+          - [ ] Open a PR with the changes
+
+          ### Quick commands
+
+          \`\`\`bash
+          # Run only the pricing tests
+          cargo test --workspace -- cost::
+
+          # Check the current verified date
+          grep PRICING_VERIFIED_DATE crates/scopeon-core/src/cost.rs
+          \`\`\`
+
+          _This issue was opened automatically by the [pricing-review workflow](.github/workflows/pricing-review.yml)._"

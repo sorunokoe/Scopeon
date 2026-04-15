@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "scopeon"
+version = "0.6.0"
+description = "AI context observability for Claude Code, Codex, Cursor, and every LLM coding tool"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.8"
+keywords = ["ai", "claude", "codex", "cursor", "observability", "tokens", "cost"]
+classifiers = [
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Debuggers",
+]
+
+[project.scripts]
+scopeon = "scopeon.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/scopeon/scopeon"
+Repository = "https://github.com/scopeon/scopeon"

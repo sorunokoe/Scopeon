@@ -1,0 +1,77 @@
+# cargo-deny configuration
+#
+# Run manually:   cargo deny check
+# CI job:         .github/workflows/ci.yml (deny job)
+# Install:        cargo install cargo-deny --locked
+#
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Include dev-dependencies in checks.
+include-dev = true
+
+# ---------------------------------------------------------------------------
+# Licenses
+# ---------------------------------------------------------------------------
+[licenses]
+# Minimum confidence threshold to consider a license detected.
+confidence-threshold = 0.8
+
+# List of explicitly allowed licenses. If a crate has a license not in this
+# list, cargo-deny will emit an error.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Zlib",
+]
+
+# Exceptions for crates that are under dual/custom licenses accepted on a
+# case-by-case basis.
+exceptions = []
+
+# ---------------------------------------------------------------------------
+# Security advisories
+# ---------------------------------------------------------------------------
+[advisories]
+# Fetch the advisory database from the official RustSec repo.
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+
+# Error on any vulnerability (warn = print but don't fail).
+version = 2
+
+# ---------------------------------------------------------------------------
+# Banned crates
+# ---------------------------------------------------------------------------
+[bans]
+# Deny multiple versions of the same crate.
+multiple-versions = "warn"
+
+# Deny wildcard dependencies.
+wildcards = "deny"
+
+# Crates that are explicitly banned (none currently).
+deny = []
+
+# Allowed duplicate crates (when semver-incompatible versions co-exist due to
+# transitive dependencies we cannot control).
+skip = []
+skip-tree = []
+
+# ---------------------------------------------------------------------------
+# Source restrictions
+# ---------------------------------------------------------------------------
+[sources]
+# Only allow crates from crates.io and our own workspace paths.
+unknown-registry = "deny"
+unknown-git = "deny"
+
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,12 @@
+[package]
+name = "scopeon-metrics"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Composable metric definitions and registry for Scopeon."
+
+[dependencies]
+scopeon-core = { path = "../scopeon-core" }
+serde = { workspace = true }

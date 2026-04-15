@@ -1,0 +1,16 @@
+PackageIdentifier: scopeon.scopeon
+PackageVersion: 0.6.0
+PackageName: scopeon
+Publisher: Scopeon Contributors
+PublisherUrl: https://github.com/scopeon/scopeon
+License: MIT
+LicenseUrl: https://github.com/scopeon/scopeon/blob/main/LICENSE-MIT
+ShortDescription: AI context observability for Claude Code, Codex, Cursor, and every LLM coding tool
+Tags:
+  - ai
+  - cli
+  - claude
+  - observability
+  - tokens
+ManifestType: defaultLocale
+ManifestVersion: 1.4.0

@@ -1,0 +1,20 @@
+/target/
+/.scopeon/
+# Cargo.lock is intentionally committed — Scopeon is a binary crate.
+# See https://doc.rust-lang.org/cargo/faq.html#why-have-cargolock-in-version-control
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files (never commit secrets)
+.env
+.env.local
