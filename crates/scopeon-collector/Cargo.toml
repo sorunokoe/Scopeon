@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "scopeon-collector"
 version.workspace = true
 edition.workspace = true
