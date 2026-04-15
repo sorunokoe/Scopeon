@@ -43,17 +43,25 @@
 
 ---
 
-## What it does
+## What you get
 
-- **Token breakdown per turn** — input · cache reads · cache writes · thinking · output · MCP calls
-- **Prompt cache intelligence** — hit-rate gauge, USD saved vs. uncached
-- **Predictive context countdown** — *"~12 turns remaining"* before hitting the context wall
-- **14 MCP tools** — agent self-monitoring + proactive push alerts without polling
-- **CI cost gate** — `scopeon ci report --fail-on-cost-delta 50` fails PRs on AI cost spikes
-- **Browser dashboard** — `scopeon serve` → live WebSocket charts at `http://localhost:7771`, zero npm
-- **Shell & git integration** — cost in your prompt, `AI-Cost:` trailer in every commit
-- **Zen Mode · Temporal Replay · Natural-language session filter**
-- **Local-first** — no cloud backend, no accounts, data stays on your machine
+🔬 **X-ray vision into every token** — see exactly what burned your context: input, cache reads/writes, thinking budget, output, MCP calls — broken down turn by turn. No more guessing.
+
+💸 **Know your real cost before the bill arrives** — live USD per turn, per session, per project, per day. Set budgets with actual alerts, not surprises.
+
+⚡ **Prompt cache that *actually* tells you if it's working** — hit-rate gauge, dollars saved vs. uncached baseline. Know in seconds whether your cache setup is doing anything.
+
+⏳ **"You have ~12 turns left"** — Scopeon tracks context fill rate over time and tells you how many turns remain before the wall. Stop being blindsided mid-task.
+
+🤖 **Your AI agent monitors itself** — 14 MCP tools let Claude Code query its own token stats, trigger alerts, and compare sessions — without you doing anything.
+
+🚦 **Fail PRs on AI cost spikes** — one command in CI, zero config. `scopeon ci report --fail-on-cost-delta 50` catches runaway cost before it merges.
+
+🌐 **Live browser dashboard** — `scopeon serve` → WebSocket-powered charts at `localhost:7771`. No npm, no Node, just Rust.
+
+🐚 **Cost follows you everywhere** — in your shell prompt, in every `git commit` as an `AI-Cost:` trailer, in Slack via digest webhooks.
+
+🔒 **Fully local, forever** — no cloud backend, no account, no telemetry. Your prompts never leave the machine. Ever.
 
 → **[Full feature list](docs/features.md)**
 
