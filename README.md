@@ -5,13 +5,13 @@
   <br/>Scopeon
 </h1>
 
-```
-  ◈  ╔═╗╔═╗╔═╗╔═╗╔═╗╔═╗╔╗╔
-     ╚═╗║  ║ ║╠═╝║╣ ║ ║║║║
-     ╚═╝╚═╝╚═╝╩  ╚═╝╚═╝╝╚╝
-     AI Context Observability
-     for Claude Code & friends
-```
+<pre align="center">
+◈  ╔═╗╔═╗╔═╗╔═╗╔═╗╔═╗╔╗╔
+   ╚═╗║  ║ ║╠═╝║╣ ║ ║║║║
+   ╚═╝╚═╝╚═╝╩  ╚═╝╚═╝╝╚╝
+   AI Context Observability
+   for Claude Code & friends
+</pre>
 
 **The AI context observatory — for every coding agent, every token, every dollar.**
 
