@@ -26,11 +26,13 @@ allow = [
     "ISC",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    # BSL-1.0: used by clipboard-win and error-code (OSI approved, FSF Free/Libre)
+    "BSL-1.0",
+    # MPL-2.0: used by option-ext (OSI approved, FSF Free/Libre)
+    "MPL-2.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "CC0-1.0",
     "Zlib",
-    "BSL-1.0",
 ]
 
 # Exceptions for crates that are under dual/custom licenses accepted on a
@@ -48,12 +50,12 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # Error on any vulnerability (warn = print but don't fail).
 version = 2
 
-# Unmaintained crates that are transitive deps we cannot control.
-# paste: RUSTSEC-2024-0384 (ratatui dep, no upgrade path)
-# instant: RUSTSEC-2024-0436 (transitive dep, no upgrade path)
+# Unmaintained transitive deps with no safe upgrade path available.
 ignore = [
-    { id = "RUSTSEC-2024-0384", reason = "transitive dep via ratatui; no safe upgrade available" },
-    { id = "RUSTSEC-2024-0436", reason = "transitive dep; no safe upgrade available" },
+    # instant v0.1.13 via notify-types → notify (RUSTSEC-2024-0384)
+    { id = "RUSTSEC-2024-0384", reason = "Unmaintained transitive dep via notify-types → notify; no safe upgrade available" },
+    # paste v1.0.15 via ratatui (RUSTSEC-2024-0436)
+    { id = "RUSTSEC-2024-0436", reason = "Unmaintained transitive dep via ratatui; no safe upgrade available" },
 ]
 
 # ---------------------------------------------------------------------------
@@ -63,9 +65,11 @@ ignore = [
 # Deny multiple versions of the same crate.
 multiple-versions = "warn"
 
-# Deny wildcard (`version = "*"`) dependencies in published crates.
-# Workspace path deps (no version specifier) are not wildcards — set to warn.
-wildcards = "warn"
+# Deny wildcard (`version = "*"`) dependencies.
+# allow-wildcard-paths exempts path-only workspace deps (no version specifier),
+# which is the standard workspace pattern and not a true wildcard.
+wildcards = "deny"
+allow-wildcard-paths = true
 
 # Crates that are explicitly banned (none currently).
 deny = []

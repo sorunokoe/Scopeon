@@ -59,9 +59,14 @@ impl Provider for ClaudeCodeProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Env-var tests mutate process-wide state; serialize them to avoid races.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_claude_config_dir_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // Use a temp-dir path so the test works on all platforms.
         let custom_dir = std::env::temp_dir().join("scopeon_test_claude");
         std::env::set_var("CLAUDE_CONFIG_DIR", custom_dir.to_str().unwrap());
@@ -72,6 +77,7 @@ mod tests {
 
     #[test]
     fn test_default_path_when_no_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("CLAUDE_CONFIG_DIR");
         let provider = ClaudeCodeProvider::new();
         // Should end with .claude/projects
