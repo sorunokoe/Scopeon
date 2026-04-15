@@ -16,7 +16,7 @@
 **The AI context observatory — for every coding agent, every token, every dollar.**
 
 [![CI](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml/badge.svg)](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/scopeon)](https://crates.io/crates/scopeon)
+[![GitHub release](https://img.shields.io/github/v/release/sorunokoe/Scopeon?label=release)](https://github.com/sorunokoe/Scopeon/releases)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
 [![MSRV: 1.86](https://img.shields.io/badge/MSRV-1.86-orange)](https://blog.rust-lang.org/2025/02/20/Rust-1.86.0.html)
 
