@@ -2,7 +2,7 @@
 # Scopeon installer — downloads the correct pre-built binary for your platform.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/scopeon/scopeon/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/sorunokoe/Scopeon/main/install.sh | sh
 #
 # Options (via environment variables):
 #   SCOPEON_VERSION  — version to install (default: latest)
@@ -13,7 +13,7 @@
 set -eu
 
 # ── Config ────────────────────────────────────────────────────────────────────
-REPO="scopeon/scopeon"
+REPO="sorunokoe/Scopeon"
 INSTALL_DIR="${SCOPEON_INSTALL:-$HOME/.local/bin}"
 BINARY="scopeon"
 

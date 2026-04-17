@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 
 VERSION = "0.6.0"
-REPO = "scopeon/scopeon"
+REPO = "sorunokoe/Scopeon"
 CACHE_DIR = Path.home() / ".cache" / "scopeon" / "bin"
 
 

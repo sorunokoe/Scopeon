@@ -11,7 +11,7 @@
 //!   feat: add OAuth login
 //!
 //!   AI-Cost: $0.14 (8 turns, 62k tokens, 71% cache)
-//!   Powered-by: Scopeon https://github.com/scopeon/scopeon
+//!   Powered-by: Scopeon https://github.com/sorunokoe/Scopeon
 //! ```
 //!
 //! # Usage
@@ -90,7 +90,7 @@ pub fn install() -> Result<()> {
     println!();
     println!("  Every commit in this repo will now include an AI-Cost trailer:");
     println!("  AI-Cost: $0.12 (8 turns, 62k tokens, 71% cache)");
-    println!("  Powered-by: Scopeon https://github.com/scopeon/scopeon");
+    println!("  Powered-by: Scopeon https://github.com/sorunokoe/Scopeon");
     println!();
     println!("  Remove with: scopeon git-hook uninstall");
 
@@ -168,7 +168,7 @@ pub fn print_trailer(db: &scopeon_core::Database) -> Result<()> {
         "AI-Cost: ~${today_cost:.2} ({today_turns} turns, {}k tokens, {cache_pct}% cache)",
         today_input / 1_000
     );
-    println!("Powered-by: Scopeon https://github.com/scopeon/scopeon");
+    println!("Powered-by: Scopeon https://github.com/sorunokoe/Scopeon");
 
     Ok(())
 }

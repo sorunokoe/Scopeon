@@ -336,7 +336,7 @@ fn build_report(db: &Database, days: i64) -> Result<String> {
     writeln!(out)?;
     writeln!(
         out,
-        "*Scopeon v{version} — AI Context Observability · <https://github.com/scopeon/scopeon>*"
+        "*Scopeon v{version} — AI Context Observability · <https://github.com/sorunokoe/Scopeon>*"
     )?;
 
     Ok(out)

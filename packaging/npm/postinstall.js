@@ -18,7 +18,7 @@ const { createGunzip } = require("zlib");
 const { Extract } = require("tar");
 
 const VERSION = require("./package.json").version;
-const REPO = "scopeon/scopeon";
+const REPO = "sorunokoe/Scopeon";
 const BASE_URL = `https://github.com/${REPO}/releases/download/v${VERSION}`;
 
 function assetName() {

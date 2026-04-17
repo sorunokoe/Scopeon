@@ -4,7 +4,7 @@
 --- Requires Neovim 0.8+ and scopeon running with `scopeon start`.
 ---
 --- Quick start (lazy.nvim):
----   { "scopeon/scopeon", config = function() require("scopeon").setup() end }
+---   { "sorunokoe/Scopeon", config = function() require("scopeon").setup() end }
 ---
 --- Manual setup — add to your statusline:
 ---   require("scopeon").setup()

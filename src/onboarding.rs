@@ -382,7 +382,7 @@ pub fn cmd_onboard() -> Result<()> {
     )?;
     writeln!(out, "  scopeon ci snapshot    — capture baseline for PRs")?;
     writeln!(out)?;
-    writeln!(out, "Docs: https://github.com/scopeon/scopeon")?;
+    writeln!(out, "Docs: https://github.com/sorunokoe/Scopeon")?;
     writeln!(
         out,
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

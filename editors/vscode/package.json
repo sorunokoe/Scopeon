@@ -5,7 +5,7 @@
   "version": "0.6.0",
   "publisher": "scopeon",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/scopeon/scopeon.git" },
+  "repository": { "type": "git", "url": "https://github.com/sorunokoe/Scopeon.git" },
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other"],
   "keywords": ["ai", "claude", "claude-code", "codex", "cursor", "tokens", "cost", "observability"],
