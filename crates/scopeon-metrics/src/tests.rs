@@ -44,6 +44,8 @@ fn ctx<'a>(turns: &'a [Turn]) -> MetricContext<'a> {
         daily_rollups: &[],
         provider_name: "claude-code",
         tool_calls: &[],
+        interaction_events: &[],
+        task_runs: &[],
     }
 }
 
@@ -150,6 +152,8 @@ fn ctx_with_tools<'a>(turns: &'a [Turn], tools: &'a [ToolCall]) -> MetricContext
         daily_rollups: &[],
         provider_name: "claude-code",
         tool_calls: tools,
+        interaction_events: &[],
+        task_runs: &[],
     }
 }
 
@@ -294,7 +298,104 @@ fn test_waste_score_capped_at_100() {
     );
 }
 
-// ── Health score tests ────────────────────────────────────────────────────────
+// ── TRIZ S4: FileHeavySession waste signal ────────────────────────────────────
+
+#[test]
+fn test_waste_detects_file_heavy_session() {
+    // 5+ turns and >40% file-read tool calls should produce FileHeavySession
+    let turns: Vec<Turn> = (0..6)
+        .map(|i| make_turn(&format!("t{i}"), 500, 0, 0, 50, 0, 0, 0.01, i * 1000, None))
+        .collect();
+    let mut tools = Vec::new();
+    // 12 file reads + 5 other = 70.6% read ratio
+    for i in 0..12 {
+        tools.push(ToolCall {
+            id: format!("tc-view-{i}"),
+            session_id: "s1".into(),
+            turn_id: turns[i % turns.len()].id.clone(),
+            tool_name: "view".into(),
+            input_size_chars: (i as i64) * 100,
+            input_hash: (i as u64) * 100,
+            timestamp: 0,
+        });
+    }
+    for i in 0..5 {
+        tools.push(ToolCall {
+            id: format!("tc-bash-{i}"),
+            session_id: "s1".into(),
+            turn_id: turns[0].id.clone(),
+            tool_name: "bash".into(),
+            input_size_chars: (i as i64) * 50,
+            input_hash: (i as u64) * 50 + 9999,
+            timestamp: 1,
+        });
+    }
+    let report = WasteReport::compute(&ctx_with_tools(&turns, &tools));
+    let has_file_heavy = report
+        .signals
+        .iter()
+        .any(|s| matches!(&s.kind, WasteKind::FileHeavySession { .. }));
+    assert!(
+        has_file_heavy,
+        "file-read-dominated session should produce FileHeavySession signal"
+    );
+}
+
+#[test]
+fn test_file_heavy_below_threshold_does_not_fire() {
+    // Only 8 file reads (below 10 threshold) — should not produce the signal
+    let turns: Vec<Turn> = (0..5)
+        .map(|i| make_turn(&format!("t{i}"), 500, 0, 0, 50, 0, 0, 0.01, i * 1000, None))
+        .collect();
+    let tools: Vec<ToolCall> = (0..8)
+        .map(|i| ToolCall {
+            id: format!("tc-view-{i}"),
+            session_id: "s1".into(),
+            turn_id: turns[0].id.clone(),
+            tool_name: "view".into(),
+            input_size_chars: (i as i64) * 100,
+            input_hash: (i as u64) * 100,
+            timestamp: 0,
+        })
+        .collect();
+    let report = WasteReport::compute(&ctx_with_tools(&turns, &tools));
+    let has_file_heavy = report
+        .signals
+        .iter()
+        .any(|s| matches!(&s.kind, WasteKind::FileHeavySession { .. }));
+    assert!(
+        !has_file_heavy,
+        "fewer than 10 file reads should not produce FileHeavySession"
+    );
+}
+
+#[test]
+fn test_file_heavy_short_session_does_not_fire() {
+    // Only 4 turns — below the 5-turn minimum
+    let turns: Vec<Turn> = (0..4)
+        .map(|i| make_turn(&format!("t{i}"), 500, 0, 0, 50, 0, 0, 0.01, i * 1000, None))
+        .collect();
+    let tools: Vec<ToolCall> = (0..15)
+        .map(|i| ToolCall {
+            id: format!("tc-view-{i}"),
+            session_id: "s1".into(),
+            turn_id: turns[0].id.clone(),
+            tool_name: "view".into(),
+            input_size_chars: (i as i64) * 100,
+            input_hash: (i as u64) * 100,
+            timestamp: 0,
+        })
+        .collect();
+    let report = WasteReport::compute(&ctx_with_tools(&turns, &tools));
+    assert!(
+        !report
+            .signals
+            .iter()
+            .any(|s| matches!(&s.kind, WasteKind::FileHeavySession { .. })),
+        "sessions with < 5 turns should not produce FileHeavySession"
+    );
+}
+
 
 use crate::health::{compute_health_score, health_trend};
 
@@ -307,6 +408,8 @@ fn test_health_score_empty_session_returns_neutral() {
         daily_rollups: &[],
         provider_name: "claude-code",
         tool_calls: &[],
+        interaction_events: &[],
+        task_runs: &[],
     };
     let waste = WasteReport::compute(&empty_ctx);
     let score = compute_health_score(&empty_ctx, &waste);
@@ -331,6 +434,8 @@ fn test_health_score_perfect_cache_high_score() {
         daily_rollups: &[],
         provider_name: "claude-code",
         tool_calls: &[],
+        interaction_events: &[],
+        task_runs: &[],
     };
     let waste = WasteReport::compute(&ctx);
     let score = compute_health_score(&ctx, &waste);
@@ -351,6 +456,8 @@ fn test_health_score_is_bounded_0_to_100() {
         daily_rollups: &[],
         provider_name: "claude-code",
         tool_calls: &[],
+        interaction_events: &[],
+        task_runs: &[],
     };
     let waste = WasteReport::compute(&ctx);
     let score = compute_health_score(&ctx, &waste);

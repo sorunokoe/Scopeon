@@ -33,6 +33,14 @@ pub enum WasteKind {
         input_tokens: i64,
         session_avg: f64,
     },
+    /// TRIZ S4: Semantic Turn Typing — detected when the session is dominated by
+    /// file-read tool calls, indicating an exploration/audit pattern where pinning
+    /// key files to the system prompt and enabling cache could reduce input tokens.
+    FileHeavySession {
+        file_read_calls: usize,
+        total_tool_calls: usize,
+        read_pct: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +178,35 @@ impl WasteReport {
             }
         }
 
+        // 5. File-heavy session (TRIZ S4 — Semantic Turn Typing).
+        // Fires when ≥ 40 % of all tool calls are file-read operations AND the
+        // session has accumulated ≥ 10 such calls across ≥ 5 turns.  This pattern
+        // indicates an exploration or audit workflow where many files are read
+        // per turn — a prime candidate for system-prompt caching of key files.
+        if ctx.turns.len() >= 5 && !ctx.tool_calls.is_empty() {
+            let file_read_calls = ctx
+                .tool_calls
+                .iter()
+                .filter(|tc| is_file_read_tool(&tc.tool_name))
+                .count();
+            let total = ctx.tool_calls.len();
+            let read_pct = file_read_calls as f64 / total as f64 * 100.0;
+            if file_read_calls >= 10 && read_pct >= 40.0 {
+                signals.push(WasteSignal {
+                    kind: WasteKind::FileHeavySession {
+                        file_read_calls,
+                        total_tool_calls: total,
+                        read_pct,
+                    },
+                    severity: Severity::Info,
+                    message: format!(
+                        "{} of {} tool calls ({:.0}%) are file reads — pin key files to system prompt",
+                        file_read_calls, total, read_pct
+                    ),
+                });
+            }
+        }
+
         // Sort for stable display order: Critical → Warning → Info, then by message
         signals.sort_by(|a, b| {
             let sev_ord = |s: &Severity| match s {
@@ -198,4 +235,23 @@ impl WasteReport {
             waste_score,
         }
     }
+}
+
+/// Returns true when a tool name indicates a file-reading operation.
+///
+/// Used by S4 Semantic Turn Typing (FileHeavySession detection). The list covers
+/// the most common file-read tool names across Claude Code, Copilot CLI, and Aider.
+/// Intentionally conservative — bash/shell are excluded because they could be
+/// anything, and false negatives are safer than false positives here.
+pub(crate) fn is_file_read_tool(name: &str) -> bool {
+    let n = name.to_lowercase();
+    // Exact names
+    matches!(n.as_str(), "view" | "cat" | "head" | "tail" | "glob" | "read_file")
+        // Prefix/infix patterns
+        || n.starts_with("read")
+        || n.contains("read_file")
+        || n.contains("view_file")
+        // Filesystem listing that loads paths into context
+        || n == "find"
+        || n == "ls"
 }

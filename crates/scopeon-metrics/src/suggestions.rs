@@ -1,6 +1,9 @@
 use crate::metric::MetricContext;
-use crate::waste::WasteReport;
-use scopeon_core::GlobalStats;
+use crate::waste::{is_file_read_tool, WasteReport};
+use scopeon_core::{
+    derive_hook_effects, interaction_token_total, provider_capabilities, GlobalStats,
+    PRICING_VERIFIED_DATE,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +128,142 @@ pub fn compute_suggestions(
                 body: format!(
                     "{:.1} MCP calls/turn — consider limiting enabled MCP servers",
                     density
+                ),
+            });
+        }
+    }
+
+    // 6b. Provider-aware interaction suggestions — only emit when the provider supports them.
+    let capabilities = provider_capabilities(ctx.provider_name);
+    let hook_effects = derive_hook_effects(ctx.interaction_events);
+
+    if capability_level(&capabilities, "mcp_identity") != "unsupported" {
+        let mut server_counts = std::collections::BTreeMap::<String, (usize, i64)>::new();
+        for event in ctx
+            .interaction_events
+            .iter()
+            .filter(|e| e.kind == "mcp" && matches!(e.phase.as_str(), "single" | "complete"))
+        {
+            let server = event
+                .mcp_server
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let entry = server_counts.entry(server).or_insert((0, 0));
+            entry.0 += 1;
+            entry.1 += interaction_token_total(event);
+        }
+        if let Some((server, (calls, tokens))) = server_counts
+            .into_iter()
+            .max_by_key(|(_, (calls, tokens))| (*calls as i64, *tokens))
+        {
+            if calls >= 3 {
+                suggestions.push(Suggestion {
+                    id: "heavy-mcp-server",
+                    severity: Severity::Info,
+                    title: "Heavy MCP Server",
+                    body: format!(
+                        "{} dominates MCP usage in this session ({} calls, ~{}k attributed tokens) — \
+                         consider narrowing its scope or using cheaper local discovery paths first",
+                        server,
+                        calls,
+                        tokens / 1000
+                    ),
+                });
+            }
+        }
+    }
+
+    if capability_level(&capabilities, "task_history") != "unsupported" {
+        if let Some(task) = ctx
+            .task_runs
+            .iter()
+            .max_by_key(|t| (t.total_tokens.unwrap_or(0), t.total_tool_calls.unwrap_or(0)))
+        {
+            let total_tokens = task.total_tokens.unwrap_or(0);
+            let total_tool_calls = task.total_tool_calls.unwrap_or(0);
+            if total_tokens > 100_000 || total_tool_calls > 20 {
+                suggestions.push(Suggestion {
+                    id: "task-fanout",
+                    severity: Severity::Warning,
+                    title: "Task Fan-Out",
+                    body: format!(
+                        "Task '{}' expanded to {} tool calls and ~{}k tokens — split it into smaller scoped tasks or tighten the task prompt/model",
+                        task.name,
+                        total_tool_calls,
+                        total_tokens / 1000
+                    ),
+                });
+            }
+            if task.prompt_size_chars > 8_000 {
+                suggestions.push(Suggestion {
+                    id: "task-prompt-bloat",
+                    severity: Severity::Info,
+                    title: "Large Task Prompt",
+                    body: format!(
+                        "Task '{}' started with a large prompt payload (~{}k chars) — trimming task setup can reduce subagent fan-out and context bloat",
+                        task.name,
+                        task.prompt_size_chars / 1000
+                    ),
+                });
+            }
+        }
+    }
+
+    if capability_level(&capabilities, "skills") != "unsupported" {
+        let skill_count = ctx
+            .interaction_events
+            .iter()
+            .filter(|e| e.kind == "skill")
+            .count();
+        let research_like = ctx
+            .interaction_events
+            .iter()
+            .filter(|e| matches!(e.phase.as_str(), "single" | "start" | "complete"))
+            .filter(|e| is_search_like(&e.name))
+            .count();
+        if skill_count == 0 && research_like >= 8 {
+            suggestions.push(Suggestion {
+                id: "skill-opportunity",
+                severity: Severity::Info,
+                title: "Skill Opportunity",
+                body: format!(
+                    "{} supports skills, and this session already shows {} discovery-heavy actions without one — use a project-specific skill before repeated search/read loops",
+                    ctx.provider_name,
+                    research_like
+                ),
+            });
+        }
+    }
+
+    if capability_level(&capabilities, "hooks") != "unsupported" {
+        let hook_starts = ctx
+            .interaction_events
+            .iter()
+            .filter(|e| e.kind == "hook" && e.phase == "start")
+            .count();
+        if hook_starts > 0 {
+            let modified = hook_effects
+                .values()
+                .filter(|effect| *effect == "modified")
+                .count();
+            let blocked = hook_effects
+                .values()
+                .filter(|effect| *effect == "blocked")
+                .count();
+            suggestions.push(Suggestion {
+                id: "hook-activity",
+                severity: if blocked > 0 {
+                    Severity::Warning
+                } else {
+                    Severity::Info
+                },
+                title: "Hook Activity",
+                body: format!(
+                    "{} hook interventions observed: {} modified, {} blocked, {} passed through — hooks are a real control point in this workflow, so keep them intentional and project-specific",
+                    hook_starts,
+                    modified,
+                    blocked,
+                    hook_starts.saturating_sub(modified + blocked)
                 ),
             });
         }
@@ -287,7 +426,224 @@ pub fn compute_suggestions(
         }
     }
 
+    // ── TRIZ S4: Semantic Turn Typing — FileHeavySession ─────────────────────
+    // When the waste engine detected a file-read-dominated tool-call pattern,
+    // surface an actionable caching suggestion here in the Insights tab.
+    let file_heavy = waste.signals.iter().find_map(|s| {
+        if let crate::waste::WasteKind::FileHeavySession {
+            file_read_calls,
+            total_tool_calls,
+            read_pct,
+        } = &s.kind
+        {
+            Some((*file_read_calls, *total_tool_calls, *read_pct))
+        } else {
+            None
+        }
+    });
+    if let Some((reads, total, pct)) = file_heavy {
+        suggestions.push(Suggestion {
+            id: "file-heavy-session",
+            severity: Severity::Info,
+            title: "File-Read Dominated Session",
+            body: format!(
+                "{reads} of {total} tool calls ({pct:.0}%) are file reads. \
+                 Pin the most-accessed files to the system prompt so Anthropic's \
+                 prompt cache can serve them at cache-read price (~10× cheaper). \
+                 Add files that stay stable across turns to a <cache_control> block.",
+            ),
+        });
+    }
+
+    // ── TRIZ S6: Conversation Phase Detection ────────────────────────────────
+    // Classify the session's recent activity into a conversation phase and surface
+    // the implication for context burn rate.  Uses tool-call patterns from the
+    // last 5 turns; falls back to input-token trend when no tool data is present.
+    if let Some((phase, implication)) = detect_conversation_phase(ctx) {
+        suggestions.push(Suggestion {
+            id: "conversation-phase",
+            severity: Severity::Info,
+            title: phase,
+            body: implication.to_string(),
+        });
+    }
+
+    // ── TRIZ S3: Pricing Staleness Warning ───────────────────────────────────
+    // Alert the user when the compiled pricing table may be more than 30 days
+    // out of date so they know cost estimates could drift.
+    if let Some(stale_days) = pricing_staleness_days() {
+        if stale_days >= 30 {
+            suggestions.push(Suggestion {
+                id: "pricing-stale",
+                severity: if stale_days >= 90 {
+                    Severity::Warning
+                } else {
+                    Severity::Info
+                },
+                title: "Pricing Table May Be Stale",
+                body: format!(
+                    "Built-in model pricing was last verified {stale_days} days ago \
+                     ({PRICING_VERIFIED_DATE}). Run `scopeon reprice` after updating \
+                     your binary, or add overrides in config.toml \
+                     ([pricing.overrides.\"model-prefix\"]) to correct cost estimates.",
+                ),
+            });
+        }
+    }
+
     suggestions
+}
+
+fn capability_level<'a>(
+    capabilities: &'a [scopeon_core::ProviderCapability],
+    capability: &str,
+) -> &'a str {
+    capabilities
+        .iter()
+        .find(|c| c.capability == capability)
+        .map(|c| c.level.as_str())
+        .unwrap_or("unsupported")
+}
+
+fn is_search_like(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("search")
+        || n.contains("rg")
+        || n.contains("grep")
+        || n.contains("view")
+        || n.contains("read")
+        || n.contains("fetch")
+        || n.contains("web")
+}
+
+// ── TRIZ S6: Conversation Phase Detection ────────────────────────────────────
+
+/// Detect the current conversation phase and return (phase_name, implication).
+///
+/// Phase classification is based on the tool-call composition of the last 5 turns.
+/// Returns `None` when there is insufficient data (< 3 turns) or the session
+/// is too ambiguous to classify with confidence.
+///
+/// Phases and their context burn-rate implications:
+/// - **Exploration** — high read/search ratio → context fills rapidly
+/// - **Focus**       — high edit/write ratio  → context stable, stay in session
+/// - **Compaction**  — last turn was a compaction event → reset in progress
+/// - **Wind-down**   — shrinking input tokens → safe to extend session further
+fn detect_conversation_phase(ctx: &MetricContext) -> Option<(&'static str, &'static str)> {
+    let n = ctx.turns.len();
+    if n < 3 {
+        return None;
+    }
+
+    // Compaction is authoritative — check before everything else.
+    if ctx.turns.last().map(|t| t.is_compaction_event).unwrap_or(false) {
+        return Some((
+            "Phase: Compaction",
+            "Context was just compacted — burn rate will drop sharply next turn. \
+             Good moment to continue without a manual /compact.",
+        ));
+    }
+
+    // Gather tool calls for the last 5 turns.
+    let recent_turn_ids: std::collections::HashSet<&str> = ctx
+        .turns
+        .iter()
+        .rev()
+        .take(5)
+        .map(|t| t.id.as_str())
+        .collect();
+    let recent_tools: Vec<&scopeon_core::ToolCall> = ctx
+        .tool_calls
+        .iter()
+        .filter(|tc| recent_turn_ids.contains(tc.turn_id.as_str()))
+        .collect();
+
+    if !recent_tools.is_empty() {
+        let total = recent_tools.len() as f64;
+        let read_count = recent_tools
+            .iter()
+            .filter(|tc| is_file_read_tool(&tc.tool_name))
+            .count() as f64;
+        let search_count = recent_tools
+            .iter()
+            .filter(|tc| is_search_tool_name(&tc.tool_name))
+            .count() as f64;
+        let edit_count = recent_tools
+            .iter()
+            .filter(|tc| is_edit_tool_name(&tc.tool_name))
+            .count() as f64;
+
+        if (read_count + search_count) / total > 0.55 {
+            return Some((
+                "Phase: Exploration",
+                "Recent turns are read/search-heavy — context is filling fast. \
+                 Consider compacting once you have a clear plan, or pin key files \
+                 to the system prompt to slow the fill rate.",
+            ));
+        }
+        if edit_count / total > 0.40 {
+            return Some((
+                "Phase: Focus",
+                "Recent turns are edit-heavy — context fill rate is stable. \
+                 Good time to stay in the session and complete the task before compacting.",
+            ));
+        }
+    }
+
+    // Fallback: token-trend analysis (no tool data or ambiguous tool mix).
+    if n >= 6 {
+        let half = n / 2;
+        let early_avg =
+            ctx.turns[..half].iter().map(|t| t.input_tokens as f64).sum::<f64>() / half as f64;
+        let late_avg = ctx.turns[half..]
+            .iter()
+            .map(|t| t.input_tokens as f64)
+            .sum::<f64>()
+            / (n - half) as f64;
+
+        if early_avg > 0.0 && late_avg < early_avg * 0.75 {
+            return Some((
+                "Phase: Wind-down",
+                "Input tokens per turn are declining — context pressure is easing. \
+                 Safe to extend this session further before considering a compact.",
+            ));
+        }
+        if early_avg > 0.0 && late_avg > early_avg * 1.35 {
+            return Some((
+                "Phase: Exploration",
+                "Input tokens per turn are growing — context is filling faster than average. \
+                 Monitor fill % closely and compact proactively to avoid mid-task interruption.",
+            ));
+        }
+    }
+
+    None
+}
+
+fn is_search_tool_name(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("search") || n.contains("grep") || n.contains("rg") || n == "find" || n == "glob"
+}
+
+fn is_edit_tool_name(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n == "edit"
+        || n == "create"
+        || n.contains("write")
+        || n.contains("edit")
+        || n.contains("replace")
+        || n.contains("str_replace")
+        || n.contains("patch")
+}
+
+// ── TRIZ S3: Pricing Staleness ────────────────────────────────────────────────
+
+/// Return the number of days since `PRICING_VERIFIED_DATE` was set.
+/// Returns `None` when the date cannot be parsed (defensive — should never happen).
+fn pricing_staleness_days() -> Option<i64> {
+    let verified = chrono::NaiveDate::parse_from_str(PRICING_VERIFIED_DATE, "%Y-%m-%d").ok()?;
+    let today = chrono::Utc::now().date_naive();
+    Some((today - verified).num_days())
 }
 
 #[cfg(test)]
@@ -295,7 +651,7 @@ mod tests {
     use super::*;
     use crate::metric::MetricContext;
     use crate::waste::WasteReport;
-    use scopeon_core::GlobalStats;
+    use scopeon_core::{GlobalStats, InteractionEvent, TaskRun};
 
     fn make_turn(input: i64, cache_read: i64, cost: f64) -> scopeon_core::Turn {
         scopeon_core::Turn {
@@ -328,6 +684,24 @@ mod tests {
             daily_rollups: &[],
             provider_name: "test",
             tool_calls: &[],
+            interaction_events: &[],
+            task_runs: &[],
+        }
+    }
+
+    fn ctx_with_provenance<'a>(
+        provider_name: &'a str,
+        interaction_events: &'a [InteractionEvent],
+        task_runs: &'a [TaskRun],
+    ) -> MetricContext<'a> {
+        MetricContext {
+            turns: &[],
+            session: None,
+            daily_rollups: &[],
+            provider_name,
+            tool_calls: &[],
+            interaction_events,
+            task_runs,
         }
     }
 
@@ -404,5 +778,86 @@ mod tests {
             suggestions.iter().any(|s| s.id == "high-cost-per-turn"),
             "should fire when cost per turn is 5× historical mean"
         );
+    }
+
+    #[test]
+    fn test_skill_opportunity_fires_for_search_heavy_copilot_session() {
+        let interactions: Vec<InteractionEvent> = (0..8)
+            .map(|i| InteractionEvent {
+                id: format!("evt-{i}"),
+                session_id: "s1".into(),
+                turn_id: None,
+                task_run_id: None,
+                correlation_id: None,
+                parent_id: None,
+                provider: "copilot-cli".into(),
+                timestamp: 1_700_000_000_000 + i,
+                kind: "tool".into(),
+                phase: "complete".into(),
+                name: if i % 2 == 0 { "rg" } else { "view" }.into(),
+                display_name: None,
+                mcp_server: None,
+                mcp_tool: None,
+                hook_type: None,
+                agent_type: None,
+                execution_mode: None,
+                model: None,
+                status: None,
+                success: Some(true),
+                input_size_chars: 100,
+                output_size_chars: 50,
+                prompt_size_chars: 0,
+                summary_size_chars: 0,
+                total_tokens: None,
+                total_tool_calls: None,
+                duration_ms: None,
+                estimated_input_tokens: 10,
+                estimated_output_tokens: 5,
+                estimated_cost_usd: 0.0,
+                confidence: "estimated".into(),
+            })
+            .collect();
+
+        let suggestions = compute_suggestions(
+            &ctx_with_provenance("copilot-cli", &interactions, &[]),
+            &empty_waste(),
+            None,
+        );
+
+        assert!(suggestions.iter().any(|s| s.id == "skill-opportunity"));
+    }
+
+    #[test]
+    fn test_task_fanout_and_prompt_bloat_fire() {
+        let tasks = vec![TaskRun {
+            id: "task-1".into(),
+            session_id: "s1".into(),
+            correlation_id: Some("corr-1".into()),
+            name: "repo-analyze".into(),
+            display_name: Some("Repository analysis".into()),
+            agent_type: "task".into(),
+            execution_mode: "background".into(),
+            requested_model: Some("claude-sonnet-4.5".into()),
+            actual_model: Some("claude-sonnet-4.5".into()),
+            started_at: 1_700_000_000_000,
+            completed_at: Some(1_700_000_010_000),
+            duration_ms: Some(10_000),
+            success: Some(true),
+            total_tokens: Some(150_000),
+            total_tool_calls: Some(32),
+            description_size_chars: 512,
+            prompt_size_chars: 12_000,
+            summary_size_chars: 256,
+            confidence: "exact".into(),
+        }];
+
+        let suggestions = compute_suggestions(
+            &ctx_with_provenance("copilot-cli", &[], &tasks),
+            &empty_waste(),
+            None,
+        );
+
+        assert!(suggestions.iter().any(|s| s.id == "task-fanout"));
+        assert!(suggestions.iter().any(|s| s.id == "task-prompt-bloat"));
     }
 }
