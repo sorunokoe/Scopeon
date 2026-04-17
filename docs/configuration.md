@@ -35,6 +35,15 @@ events = ["context_crisis", "budget_warning"]  # empty list = all event types
 url    = "https://discord.com/api/webhooks/..."
 events = ["context_crisis"]
 
+# OpenTelemetry push exporter — Phase 2 (planned)
+# When otlp_endpoint is set, Scopeon pushes OTLP/HTTP JSON every otlp_interval_secs.
+# Leave unset (default) for zero overhead; use the Prometheus bridge in the meantime.
+# [telemetry]
+# otlp_endpoint      = "http://localhost:4318"   # OTLP/HTTP receiver
+# otlp_interval_secs = 30
+# [telemetry.otlp_headers]
+# "x-honeycomb-team" = "your-api-key"
+
 # Custom model pricing overrides
 [pricing]
 # override_file = "~/.scopeon/my-pricing.toml"

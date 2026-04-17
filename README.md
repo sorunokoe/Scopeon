@@ -40,6 +40,7 @@
 | "Did my optimization actually help?" | `compare_sessions` before/after diff |
 | "Can I gate AI cost in CI?" | `scopeon ci report --fail-on-cost-delta 50` |
 | "How is my whole team using AI?" | `scopeon serve` — privacy-filtered team API |
+| "Can I see AI cost in Grafana / Datadog?" | Prometheus bridge or OTLP push — [docs/opentelemetry.md](docs/opentelemetry.md) |
 
 ---
 
@@ -53,7 +54,9 @@
 
 ⏳ **"You have ~12 turns left"** — Scopeon tracks context fill rate over time and tells you how many turns remain before the wall. Stop being blindsided mid-task.
 
-🤖 **Your AI agent monitors itself** — 14 MCP tools let Claude Code query its own token stats, trigger alerts, and compare sessions — without you doing anything.
+🧭 **See what the agent actually did** — provenance-aware history shows which skills, MCPs, hooks, tasks, and subagents were involved, with exact vs. estimated support called out per provider.
+
+🤖 **Your AI agent monitors itself** — 17 MCP tools let Claude Code query its own token stats, provenance history, trigger alerts, and compare sessions — without you doing anything.
 
 🚦 **Fail PRs on AI cost spikes** — one command in CI, zero config. `scopeon ci report --fail-on-cost-delta 50` catches runaway cost before it merges.
 
@@ -139,7 +142,7 @@ scopeon doctor     # health diagnostics
 ```bash
 scopeon init
 # → writes MCP server config to ~/.claude/settings.json
-# Claude Code now has 14 Scopeon tools + proactive push alerts
+# Claude Code now has 17 Scopeon tools + proactive push alerts
 ```
 
 ### All commands
@@ -179,6 +182,7 @@ scopeon doctor                 # health diagnostics
 | CI cost gate | [docs/ci.md](docs/ci.md) |
 | Shell & git integration | [docs/shell-git.md](docs/shell-git.md) |
 | Team mode & REST API | [docs/team.md](docs/team.md) |
+| OpenTelemetry integration | [docs/opentelemetry.md](docs/opentelemetry.md) |
 | Supported providers | [docs/providers.md](docs/providers.md) |
 | Configuration reference | [docs/configuration.md](docs/configuration.md) |
 | Architecture & codebase map | [ARCHITECTURE.md](ARCHITECTURE.md) |

@@ -60,7 +60,8 @@
 | **Browser dashboard** | `scopeon serve` → `http://localhost:7771` — live WebSocket charts, zero npm |
 | **CI cost gate** | `scopeon ci report --fail-on-cost-delta 50` — fail PRs when AI cost spikes |
 | **Privacy-filtered HTTP API** | Four tiers: health-only to full metrics |
-| **Export** | JSON or CSV for external analysis and data pipelines |
+| **Export** | JSON, CSV, or OTLP JSON for external analysis and data pipelines |
+| **OpenTelemetry export** | Prometheus bridge (zero code), OTLP/HTTP push, or `scopeon export --format otlp-json` — feeds Grafana, Datadog, Honeycomb, any OTel backend. [→ guide](opentelemetry.md) |
 | **Reprice** | Recalculate all historical costs after a provider price change in seconds |
 
 ## ⚙️ Engineering

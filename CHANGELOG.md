@@ -9,6 +9,107 @@ Scopeon follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### S-8 — Phase 2: OTLP/HTTP JSON Push Exporter (planned, zero new deps)
+
+- `[telemetry]` config section: `otlp_endpoint`, `otlp_interval_secs`, `otlp_headers`.
+- New `src/otlp.rs`: `build_otlp_metrics_json(snap: &MetricSnapshot) -> String` serialises
+  `MetricSnapshot` into OTLP MetricsData JSON using only `serde_json` (already present).
+  Maps `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`,
+  `ai.usage.cache_read_tokens`, `ai.cost.usd_today`, `ai.context.fill_pct`, etc.
+- Background alert task extended: fires `do_http_post(otlp_endpoint, json)` every
+  `otlp_interval_secs` via system `curl` (already used for webhook delivery). Zero overhead
+  when `otlp_endpoint` is unset (PC-2 resolved by separation by condition).
+- `GET /otlp/v1/metrics` pull endpoint on `scopeon serve` for pull-mode collectors.
+
+### S-8 — Phase 3: Trace Export (planned, zero new deps)
+
+- `scopeon export --format otlp-json` — offline/CI mode; reads SQLite, serialises all
+  sessions/turns as OTLP TraceData JSON (sessions = root spans, turns = child spans,
+  token counts as `gen_ai.*` span attributes). Pipeable to any OTLP endpoint via curl.
+- Optional continuous trace push: completed sessions flushed as OTLP spans to configured
+  `otlp_endpoint` alongside metrics push.
+
+---
+
+## [0.7.0] — 2026-04-17
+
+This release delivers OpenTelemetry integration documentation (S-8 Phase 1), the Copilot CLI
+provider parser, semantic turn typing, adaptive compaction advisory, ambient MCP status push,
+IDE SSE stream, git-native team cost ledger, self-calibrating health scores, Zen Mode, temporal
+replay, full mouse navigation, natural-language session filter, anomaly cards, Prometheus label
+dimensions, and a wide range of TUI and accuracy improvements.
+
+### S-8 — Zero-Dependency OpenTelemetry Export: Phase 1 (TRIZ PC-1 resolution)
+
+**TRIZ analysis**: Users want AI cost/token metrics in Grafana, Datadog, Honeycomb, and any
+OTel-compatible backend. The naive path — embedding the `opentelemetry-sdk` crate — introduces
+6–15 MB of transitive dependencies (tonic, prost, h2) that violate Scopeon's local-first,
+zero-friction contract.
+
+**Physical Contradiction (PC-1)**: Scopeon MUST include OTel protocol support (enterprise
+integration) AND MUST NOT include OTel libraries (lightweight, local-first). Resolved via
+separation by structure (OTel Collector as external mediator) and by condition (zero overhead
+when no endpoint is configured).
+
+**Ideal Final Result (IFR)**: The Prometheus `/metrics` endpoint already present in
+`scopeon serve` (v0.5.0) IS the OTel interface — any OTel Collector with a Prometheus receiver
+bridges it to any backend today. The function is delivered by the system already present.
+
+**Vepol resolution** (Standard 1.2.1 — Mediator):
+`S1 (Scopeon) →[Prometheus]→ S3 (OTel Collector) →[OTLP]→ S2 (Backend)` — Collector is the
+mediating substance; Scopeon never speaks gRPC/protobuf.
+
+**40 Principles applied**: #1 Segmentation, #2 Taking Out, #6 Universality,
+#22 Turn Harm into Benefit, #24 Mediator, #28 Replace Mechanism.
+
+- New `docs/opentelemetry.md` — complete OTel integration guide covering three paths: Prometheus
+  bridge (zero config), OTLP/HTTP push (Phase 2, planned), and trace export (Phase 3, planned).
+  Includes quick-start YAML for Grafana Cloud, Datadog, Honeycomb, and self-hosted Prometheus.
+- `docs/features.md` updated with OpenTelemetry row in Team & Integration table.
+- Binary size delta: 0 KB. New Cargo dependencies: zero.
+
+### S-7 — Optimal Compaction Advisory (TRIZ PC-5 resolution)
+
+- New `CompactionAdvisory` alert kind fires **before** the context crisis, in the 55–79% fill window.
+- `compaction_advisory_score()` combines fill percentage, fill acceleration (rate-of-change of consecutive slopes), and inverse cache-write fraction to pinpoint the optimal compact moment.
+- Score > 0.65 triggers a `notifications/scopeon/alert` push notification of type `compaction_advisory` with `should_compact: true`, `fill_pct`, and `advisory_score` — **no token cost** per JSON-RPC §4.
+- 60-second debounce per the existing `AlertDebounce` infrastructure.
+- Fill history (last 5 samples) tracked in a `VecDeque<f64>` inside the background task — zero allocations at steady state.
+
+### S-3 — Zero-Token Ambient Status Push (TRIZ IFR)
+
+- Every 30 seconds when context is below 80% fill, the MCP background task emits a `notifications/scopeon/status` push notification with method type `ambient_status`.
+- Payload: `fill_pct`, `predicted_turns_remaining`, `daily_cost_usd`, `cache_hit_rate_pct`, `should_compact`, and a lightweight `health_score_proxy`.
+- Ambient push is **periodic** (not debounced like alerts) — no cooldown gate, no agent poll needed.
+- Agents subscribed to MCP notifications get a free continuous status update at ~30 s cadence.
+
+### S-4 — IDE SSE Status Endpoint (TRIZ TC resolution)
+
+- New `GET /sse/v1/status` route on the HTTP server (tier 1+, same auth as other tiered endpoints).
+- Returns a persistent `text/event-stream` response: compact JSON events every ~2 s with `fill_pct`, `daily_cost_usd`, `cache_hit_rate_pct`, `predicted_turns_remaining`, `should_compact`.
+- Powered by the existing broadcast channel — **zero additional DB queries** per connected client.
+- Keep-alive pings prevent proxy timeouts. Lagged clients silently skip stale frames.
+- Added to startup banner: `GET /sse/v1/status — IDE status stream (SSE, tier 1+)`.
+- Dependency: `tokio-stream 0.1` added to binary crate for `UnboundedReceiverStream`.
+
+### S-2 — Git-Native Team AI Cost Ledger (TRIZ resource mobilisation)
+
+- New `scopeon team [--days N]` command aggregates `AI-Cost:` trailers from `git log` history.
+- Reads git commit history locally — no cloud, no data sharing, works with the existing `git-hook install` integration.
+- Groups commits by author email; outputs a Markdown table with columns: Author · Commits · AI Commits · Total Cost · Avg/Commit · Tokens.
+- Prints summary line with total spend and percentage of AI-assisted commits.
+- Includes a tip when no trailers are found (guides user to `scopeon init`).
+- Graceful error when run outside a git repository or when git is not in `PATH`.
+
+### S-5 — Self-Calibrating Adaptive Health Score (TRIZ PC-1 resolution)
+
+- New `ProjectProfile` enum (`CacheHeavy`, `Exploration`, `ToolHeavy`, `Balanced`) inferred from session telemetry.
+- `classify_project_profile()` uses cache intensity, output/input ratio (thinking proxy), and MCP call density to pick the right profile.
+- `WeightSet::for_profile()` returns profile-tuned weights (e.g. `CacheHeavy` → cache 40 pts, `Exploration` → waste 35 pts) that still sum to 100.
+- New `compute_health_score_adaptive()` returns `(f64, AdaptiveHealthBreakdown)` — backward-compatible with existing callers via `compute_health_score` which is unchanged.
+- `AdaptiveHealthBreakdown` exposes `profile_label()` for display in the TUI Insights tab.
+- All new types re-exported from `scopeon-metrics` crate root.
+
 ### Narrative Intelligence Header (Dashboard)
 
 - `draw_kpi_strip()` now rotates through natural-language insight sentences instead of raw KPI chips.
@@ -445,26 +546,11 @@ This release applies a **TRIZ-inspired v2 analysis** — 10 inventive solutions 
 
 ---
 
-[Unreleased]: https://github.com/sorunokoe/Scopeon/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/sorunokoe/Scopeon/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/sorunokoe/Scopeon/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/sorunokoe/Scopeon/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/sorunokoe/Scopeon/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/sorunokoe/Scopeon/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sorunokoe/Scopeon/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sorunokoe/Scopeon/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/sorunokoe/Scopeon/releases/tag/v0.1.0
-
-
-
-### Added — TRIZ Phase 1: Pre-Computation Engine
-
-- `MetricSnapshot` struct in `scopeon-mcp` caches all 10 frequently-queried MCP metrics
-  in a `RwLock`-protected in-memory snapshot.
-- Background Tokio task refreshes the snapshot at an adaptive rate:
-  5 s (IDLE, context < 50 %) → 1 s (ACTIVE, 50–80 %) → 200 ms (CRISIS, > 80 %).
-- Every cacheable tool call now reads from the snapshot with **zero database queries**.
-  Only `compare_sessions` (which requires specific session IDs) always queries live.
-
-### Added — TRIZ Phase 2: Adaptive TUI State Machine
-
-- TUI `refresh_interval` now adjusts dynamically based on context pressure at the end
-  of every `app.refresh()` call:
-  - < 50 % fill → 2 s interval (idle, save CPU)
-  - 50 – 80 % fill → 500 ms (active, timely updates)
