@@ -5,8 +5,8 @@
  * Platform/arch → release asset mapping:
  *   darwin  arm64  → scopeon-aarch64-apple-darwin
  *   darwin  x64    → scopeon-x86_64-apple-darwin
- *   linux   x64    → scopeon-x86_64-unknown-linux-musl
- *   linux   arm64  → scopeon-aarch64-unknown-linux-musl
+ *   linux   x64    → scopeon-x86_64-unknown-linux-gnu
+ *   linux   arm64  → scopeon-aarch64-unknown-linux-gnu
  *   win32   x64    → scopeon-x86_64-pc-windows-msvc.exe
  */
 
@@ -26,8 +26,8 @@ function assetName() {
   const a = process.arch;
   if (p === "darwin" && a === "arm64") return "scopeon-aarch64-apple-darwin.tar.gz";
   if (p === "darwin" && a === "x64")  return "scopeon-x86_64-apple-darwin.tar.gz";
-  if (p === "linux"  && a === "x64")  return "scopeon-x86_64-unknown-linux-musl.tar.gz";
-  if (p === "linux"  && a === "arm64") return "scopeon-aarch64-unknown-linux-musl.tar.gz";
+  if (p === "linux"  && a === "x64")  return "scopeon-x86_64-unknown-linux-gnu.tar.gz";
+  if (p === "linux"  && a === "arm64") return "scopeon-aarch64-unknown-linux-gnu.tar.gz";
   if (p === "win32"  && a === "x64")  return "scopeon-x86_64-pc-windows-msvc.zip";
   throw new Error(`Unsupported platform: ${p} ${a}. Build from source: https://github.com/${REPO}`);
 }

@@ -105,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/sorunokoe/Scopeon/main/install.sh |
 ### From source
 
 ```bash
-cargo install scopeon
+cargo install --git https://github.com/sorunokoe/Scopeon
 ```
 
 **Requirements:** Rust 1.88+ · macOS 12+ or Linux (glibc 2.31+) · Windows 10+

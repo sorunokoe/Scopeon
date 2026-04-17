@@ -30,9 +30,9 @@ def _asset_name() -> str:
     if s == "darwin" and m == "x86_64":
         return "scopeon-x86_64-apple-darwin.tar.gz"
     if s == "linux" and m == "x86_64":
-        return "scopeon-x86_64-unknown-linux-musl.tar.gz"
+        return "scopeon-x86_64-unknown-linux-gnu.tar.gz"
     if s == "linux" and m in ("aarch64", "arm64"):
-        return "scopeon-aarch64-unknown-linux-musl.tar.gz"
+        return "scopeon-aarch64-unknown-linux-gnu.tar.gz"
     if s == "windows" and m == "amd64":
         return "scopeon-x86_64-pc-windows-msvc.zip"
     raise SystemExit(

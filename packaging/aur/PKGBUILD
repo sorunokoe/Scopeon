@@ -9,10 +9,10 @@ license=('MIT' 'Apache')
 provides=('scopeon')
 conflicts=('scopeon')
 
-source_x86_64=("${pkgname}-${pkgver}-x86_64.tar.gz::https://github.com/sorunokoe/Scopeon/releases/download/v${pkgver}/scopeon-x86_64-unknown-linux-musl.tar.gz")
-source_aarch64=("${pkgname}-${pkgver}-aarch64.tar.gz::https://github.com/sorunokoe/Scopeon/releases/download/v${pkgver}/scopeon-aarch64-unknown-linux-musl.tar.gz")
-sha256sums_x86_64=('PLACEHOLDER_X86_64')
-sha256sums_aarch64=('PLACEHOLDER_AARCH64')
+source_x86_64=("${pkgname}-${pkgver}-x86_64.tar.gz::https://github.com/sorunokoe/Scopeon/releases/download/v${pkgver}/scopeon-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("${pkgname}-${pkgver}-aarch64.tar.gz::https://github.com/sorunokoe/Scopeon/releases/download/v${pkgver}/scopeon-aarch64-unknown-linux-gnu.tar.gz")
+sha256sums_x86_64=('773170bd32e97092b9429194f7f0217f363e187880b71be35e60c044ac023c17')
+sha256sums_aarch64=('9eec5a7f0a3283bd2c927d2e80fda4d7d485ee239a14db398b0414a2a63852d4')
 
 package() {
     install -Dm755 scopeon "${pkgdir}/usr/bin/scopeon"
