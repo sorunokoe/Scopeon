@@ -379,7 +379,7 @@ fn draw_model_breakdown(f: &mut Frame, app: &App, area: Rect) {
     // Compute name column width dynamically: inner width minus cost (8) + bar (12) + spacing.
     let inner_w = area.width.saturating_sub(2) as usize;
     let fixed = 2 + 8 + 2 + 10; // indent + cost + spacing + bar
-    let name_w = inner_w.saturating_sub(fixed).max(10).min(28);
+    let name_w = inner_w.saturating_sub(fixed).clamp(10, 28);
 
     let mut lines: Vec<Line> = vec![];
     for (model, cost) in items.iter().take(area.height as usize - 2) {
@@ -419,7 +419,7 @@ fn draw_project_breakdown(f: &mut Frame, app: &App, area: Rect) {
 
     let inner_w = area.width.saturating_sub(2) as usize;
     let fixed = 2 + 8 + 2 + 10;
-    let name_w = inner_w.saturating_sub(fixed).max(10).min(32);
+    let name_w = inner_w.saturating_sub(fixed).clamp(10, 32);
 
     let mut lines: Vec<Line> = vec![];
     for (project, cost) in items.iter().take(area.height as usize - 2) {

@@ -37,6 +37,6 @@ pub trait Provider: Send + Sync {
         let db_guard = db
             .lock()
             .map_err(|_| anyhow::anyhow!("Database mutex poisoned"))?;
-        self.scan(&*db_guard)
+        self.scan(&db_guard)
     }
 }
