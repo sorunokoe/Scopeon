@@ -536,7 +536,12 @@ fn detect_conversation_phase(ctx: &MetricContext) -> Option<(&'static str, &'sta
     }
 
     // Compaction is authoritative — check before everything else.
-    if ctx.turns.last().map(|t| t.is_compaction_event).unwrap_or(false) {
+    if ctx
+        .turns
+        .last()
+        .map(|t| t.is_compaction_event)
+        .unwrap_or(false)
+    {
         return Some((
             "Phase: Compaction",
             "Context was just compacted — burn rate will drop sharply next turn. \
@@ -593,8 +598,11 @@ fn detect_conversation_phase(ctx: &MetricContext) -> Option<(&'static str, &'sta
     // Fallback: token-trend analysis (no tool data or ambiguous tool mix).
     if n >= 6 {
         let half = n / 2;
-        let early_avg =
-            ctx.turns[..half].iter().map(|t| t.input_tokens as f64).sum::<f64>() / half as f64;
+        let early_avg = ctx.turns[..half]
+            .iter()
+            .map(|t| t.input_tokens as f64)
+            .sum::<f64>()
+            / half as f64;
         let late_avg = ctx.turns[half..]
             .iter()
             .map(|t| t.input_tokens as f64)

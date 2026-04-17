@@ -396,7 +396,6 @@ fn test_file_heavy_short_session_does_not_fire() {
     );
 }
 
-
 use crate::health::{compute_health_score, health_trend};
 
 #[test]

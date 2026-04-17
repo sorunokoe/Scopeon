@@ -891,8 +891,8 @@ async fn handle_sse_status(
             match rx.recv().await {
                 Ok(json_str) => {
                     if let Ok(snap) = serde_json::from_str::<Value>(&json_str) {
-                        let status = serde_json::to_string(&extract_status(&snap))
-                            .unwrap_or_default();
+                        let status =
+                            serde_json::to_string(&extract_status(&snap)).unwrap_or_default();
                         if event_tx.send(status).is_err() {
                             break;
                         }

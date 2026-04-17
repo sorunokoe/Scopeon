@@ -121,12 +121,12 @@ fn snap_or_live<F: FnOnce(&Arc<Mutex<Database>>) -> Value>(
 /// no `id` field (fire-and-forget per JSON-RPC 2.0 §4).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum AlertKind {
-    ContextCrisis,       // fill_pct >= 95%
-    ContextWarning,      // fill_pct >= 80%
-    BudgetWarning,       // daily spend > 90% of limit
-    LowTurnsLeft,        // predicted_turns_remaining <= 5
+    ContextCrisis,  // fill_pct >= 95%
+    ContextWarning, // fill_pct >= 80%
+    BudgetWarning,  // daily spend > 90% of limit
+    LowTurnsLeft,   // predicted_turns_remaining <= 5
     CompactionDetected,
-    CompactionAdvisory,  // S-7: pre-crisis optimal compaction window (55–79%, accelerating)
+    CompactionAdvisory, // S-7: pre-crisis optimal compaction window (55–79%, accelerating)
 }
 
 #[derive(Debug, Clone)]
@@ -361,7 +361,10 @@ fn check_compaction_advisory(
         .token_usage
         .as_ref()
         .and_then(|v| {
-            let write = v.get("cache_write_tokens").and_then(Value::as_f64).unwrap_or(0.0);
+            let write = v
+                .get("cache_write_tokens")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
             let total = v.get("total_tokens").and_then(Value::as_f64).unwrap_or(0.0);
             (total > 0.0).then_some(write / total)
         })
@@ -1540,7 +1543,8 @@ pub async fn run_mcp_server(db: Arc<Mutex<Database>>) -> Result<()> {
         let mut first_refresh = true;
 
         // S-7: Track fill_pct history (last 5 samples) for acceleration detection.
-        let mut fill_history: std::collections::VecDeque<f64> = std::collections::VecDeque::with_capacity(5);
+        let mut fill_history: std::collections::VecDeque<f64> =
+            std::collections::VecDeque::with_capacity(5);
 
         // S-3: Ambient status push every 30 s when not in crisis (no token cost).
         let mut last_ambient = std::time::Instant::now();
@@ -1609,9 +1613,7 @@ pub async fn run_mcp_server(db: Arc<Mutex<Database>>) -> Result<()> {
 
             // S-3: Ambient status push — zero-token periodic notification at 30s.
             // Only fires outside the crisis band (≥ 80 % fill triggers proper alerts).
-            if fill_pct < 80.0
-                && last_ambient.elapsed().as_secs() >= AMBIENT_INTERVAL_SECS
-            {
+            if fill_pct < 80.0 && last_ambient.elapsed().as_secs() >= AMBIENT_INTERVAL_SECS {
                 last_ambient = std::time::Instant::now();
                 let guard = snapshot_writer.read().unwrap_or_else(|p| p.into_inner());
                 let snap = &*guard;
@@ -1642,12 +1644,13 @@ pub async fn run_mcp_server(db: Arc<Mutex<Database>>) -> Result<()> {
                 // Lightweight health proxy (no full MetricContext needed here).
                 let health_proxy = (cache_hit_rate * 35.0
                     + (100.0 - fill_pct).max(0.0) * 0.35
-                    + (100.0 - snap
-                        .optimization_suggestions
-                        .as_ref()
-                        .and_then(|v| v.get("waste_score"))
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0))
+                    + (100.0
+                        - snap
+                            .optimization_suggestions
+                            .as_ref()
+                            .and_then(|v| v.get("waste_score"))
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0))
                         * 0.30)
                     .clamp(0.0, 100.0);
 

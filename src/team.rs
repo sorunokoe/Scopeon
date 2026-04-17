@@ -41,7 +41,12 @@ fn parse_ai_cost_trailer(value: &str) -> Option<(f64, u64, f64)> {
     let cost = v
         .split_whitespace()
         .find(|w| w.starts_with('$'))
-        .and_then(|w| w.trim_start_matches('$').trim_end_matches(',').parse::<f64>().ok())?;
+        .and_then(|w| {
+            w.trim_start_matches('$')
+                .trim_end_matches(',')
+                .parse::<f64>()
+                .ok()
+        })?;
 
     // Extract turns (optional, default 0).
     let turns: u64 = v
@@ -87,7 +92,9 @@ pub fn cmd_team_report(days: i64) -> Result<()> {
         .output();
     match repo_check {
         Ok(o) if !o.status.success() => {
-            anyhow::bail!("Not inside a git repository. `scopeon team` must be run from a git repo.");
+            anyhow::bail!(
+                "Not inside a git repository. `scopeon team` must be run from a git repo."
+            );
         },
         Err(_) => {
             anyhow::bail!("`git` not found in PATH. Install git to use `scopeon team`.");
@@ -153,9 +160,7 @@ pub fn cmd_team_report(days: i64) -> Result<()> {
     let total_commits: usize = rows.iter().map(|(_, s)| s.commits).sum();
 
     println!("## AI Cost by Author — last {} days\n", days);
-    println!(
-        "| Author | Commits | AI Commits | Total Cost | Avg / Commit | Tokens |"
-    );
+    println!("| Author | Commits | AI Commits | Total Cost | Avg / Commit | Tokens |");
     println!("|--------|---------|------------|------------|--------------|--------|");
 
     for (email, stats) in &rows {
@@ -181,16 +186,14 @@ pub fn cmd_team_report(days: i64) -> Result<()> {
 
         println!(
             "| {} | {} | {} | ${:.2} | ${:.2} | {} |",
-            email,
-            stats.commits,
-            ai_commits,
-            stats.total_cost_usd,
-            avg,
-            tokens_display,
+            email, stats.commits, ai_commits, stats.total_cost_usd, avg, tokens_display,
         );
     }
 
-    println!("\n**Total**: {} commits, ${:.2} AI spend", total_commits, total_cost);
+    println!(
+        "\n**Total**: {} commits, ${:.2} AI spend",
+        total_commits, total_cost
+    );
     if commits_seen > 0 {
         let pct = commits_with_trailer as f64 / commits_seen as f64 * 100.0;
         println!(
@@ -214,7 +217,8 @@ mod tests {
 
     #[test]
     fn parse_full_trailer() {
-        let (cost, turns, tokens_k) = parse_ai_cost_trailer("$0.42 (8 turns, 42k tokens, 68% cache)").unwrap();
+        let (cost, turns, tokens_k) =
+            parse_ai_cost_trailer("$0.42 (8 turns, 42k tokens, 68% cache)").unwrap();
         assert!((cost - 0.42).abs() < 1e-9);
         assert_eq!(turns, 8);
         assert!((tokens_k - 42.0).abs() < 1e-9);

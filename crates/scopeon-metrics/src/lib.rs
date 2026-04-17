@@ -21,8 +21,8 @@ pub mod waste;
 
 pub use health::{
     classify_project_profile, compute_health_score, compute_health_score_adaptive,
-    compute_health_score_with_breakdown, AdaptiveHealthBreakdown, HealthBreakdown,
-    ProjectProfile, WeightSet,
+    compute_health_score_with_breakdown, AdaptiveHealthBreakdown, HealthBreakdown, ProjectProfile,
+    WeightSet,
 };
 pub use metric::{Metric, MetricCategory, MetricContext, MetricValue};
 pub use registry::MetricRegistry;

@@ -75,13 +75,33 @@ impl WeightSet {
     pub fn for_profile(p: ProjectProfile) -> Self {
         match p {
             // CacheHeavy: cache is the primary value-driver — reward it heavily.
-            ProjectProfile::CacheHeavy => WeightSet { cache: 40.0, context: 20.0, cost: 20.0, waste: 20.0 },
+            ProjectProfile::CacheHeavy => WeightSet {
+                cache: 40.0,
+                context: 20.0,
+                cost: 20.0,
+                waste: 20.0,
+            },
             // Exploration: thinking tokens consume budget fast — context & waste matter most.
-            ProjectProfile::Exploration => WeightSet { cache: 15.0, context: 30.0, cost: 20.0, waste: 35.0 },
+            ProjectProfile::Exploration => WeightSet {
+                cache: 15.0,
+                context: 30.0,
+                cost: 20.0,
+                waste: 35.0,
+            },
             // ToolHeavy: many short calls accumulate cost quickly — penalise spend and waste.
-            ProjectProfile::ToolHeavy => WeightSet { cache: 25.0, context: 20.0, cost: 30.0, waste: 25.0 },
+            ProjectProfile::ToolHeavy => WeightSet {
+                cache: 25.0,
+                context: 20.0,
+                cost: 30.0,
+                waste: 25.0,
+            },
             // Balanced: mild upgrade to cache vs historical baseline (still rewards good caching).
-            ProjectProfile::Balanced => WeightSet { cache: 30.0, context: 25.0, cost: 25.0, waste: 20.0 },
+            ProjectProfile::Balanced => WeightSet {
+                cache: 30.0,
+                context: 25.0,
+                cost: 25.0,
+                waste: 20.0,
+            },
         }
     }
 }
