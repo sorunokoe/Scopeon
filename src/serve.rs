@@ -20,11 +20,12 @@
 /// scopeon serve --port 8080          # custom port
 /// scopeon serve --tier 2             # expose per-session metadata
 /// scopeon serve --tier 0             # health-check only (most private)
+/// scopeon serve --lan --tier 1 --secret team-token   # LAN-safe aggregate sharing
 /// ```
 ///
 /// # Team Usage
 ///
-/// Each team member runs `scopeon serve --tier 1` on their machine.
+/// Each team member runs `scopeon serve --lan --tier 1 --secret <token>` on their machine.
 /// A central dashboard (web app or `scopeon status --remote http://...`) polls
 /// all instances and renders the aggregated team view.
 /// Raw prompts, file paths, and session content NEVER leave the machine.
@@ -36,19 +37,21 @@ use anyhow::Result;
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
+        Query, State, WebSocketUpgrade,
     },
-    http::{header, HeaderValue, StatusCode},
-    response::IntoResponse,
+    http::{header, HeaderName, HeaderValue, StatusCode},
+    response::{sse::Event, IntoResponse},
     routing::get,
     Json, Router,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
+use tokio_stream::StreamExt as _;
 use tower_http::cors::CorsLayer;
 
 use scopeon_core::user_config::UserConfig;
-use scopeon_core::Database;
+use scopeon_core::{derive_hook_effects, interaction_token_total, provider_capabilities, Database};
 
 /// Embedded single-file dashboard served at `GET /`.
 static DASHBOARD_HTML: &str = include_str!("dashboard.html");
@@ -59,7 +62,7 @@ struct ServeState {
     db: Arc<Mutex<Database>>,
     tier: u8,
     started_at: Instant,
-    /// Optional shared secret for tier ≥ 2 endpoints.
+    /// Optional shared secret for tiered endpoints.
     /// When set, callers must supply `x-scopeon-token: <secret>` header.
     secret: Option<String>,
     /// Broadcast channel for WebSocket snapshot pushes.
@@ -67,6 +70,12 @@ struct ServeState {
     ws_tx: broadcast::Sender<String>,
     /// §1.2: UserConfig loaded once at startup to avoid repeated disk reads on every heartbeat.
     config: Arc<UserConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SessionDetailQuery {
+    session_id: Option<String>,
+    limit: Option<usize>,
 }
 
 /// Start the HTTP server.
@@ -77,6 +86,17 @@ pub async fn run_serve(
     lan: bool,
     secret: Option<String>,
 ) -> Result<()> {
+    let secret = secret.and_then(|raw| {
+        let trimmed = raw.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
+    if lan && tier >= 1 && secret.is_none() {
+        anyhow::bail!(
+            "LAN mode with tier {} requires --secret <token> so metrics are not exposed to the whole network",
+            tier
+        );
+    }
+
     // Broadcast channel: snapshot task → all active WebSocket clients.
     // Capacity of 8 means up to 8 snapshots can be queued before slow clients
     // start receiving `RecvError::Lagged` and are silently skipped.
@@ -116,9 +136,10 @@ pub async fn run_serve(
     // CORS — §2.2: In LAN mode the dashboard is served from http://<machine-ip>:<port>;
     // the browser's Origin header will be that IP address, not localhost. Using a
     // localhost-only allowlist silently blocks all LAN dashboard API calls.
-    // Use permissive() in LAN mode (intentionally open — users chose --lan explicitly).
+    // Use permissive() in LAN mode; auth is enforced separately via x-scopeon-token.
     // In localhost-only mode, allow both bare hostname and port-specific origins for
     // clients that send a port in their Origin header (some browsers/tools do).
+    let auth_header = HeaderName::from_static("x-scopeon-token");
     let cors = if lan {
         tower_http::cors::CorsLayer::permissive()
     } else {
@@ -132,7 +153,7 @@ pub async fn run_serve(
                 format!("http://127.0.0.1:{port}").parse().unwrap(),
             ])
             .allow_methods([axum::http::Method::GET])
-            .allow_headers([header::CONTENT_TYPE])
+            .allow_headers([header::CONTENT_TYPE, auth_header])
     };
 
     let app = Router::new()
@@ -143,7 +164,14 @@ pub async fn run_serve(
         .route("/api/v1/budget", get(handle_budget))
         .route("/api/v1/sessions", get(handle_sessions))
         .route("/api/v1/context", get(handle_context))
+        .route("/api/v1/interactions", get(handle_interactions))
+        .route("/api/v1/tasks", get(handle_tasks))
+        .route(
+            "/api/v1/provider-capabilities",
+            get(handle_provider_capabilities),
+        )
         .route("/ws/v1/metrics", get(handle_ws))
+        .route("/sse/v1/status", get(handle_sse_status))
         .layer(cors)
         .with_state(state);
 
@@ -169,6 +197,9 @@ pub async fn run_serve(
     eprintln!("   Dashboard: http://localhost:{port}");
     eprintln!("   Bind:      {bind_display}");
     eprintln!("   Tier: {tier} ({})", tier_description(tier));
+    if secret.is_some() {
+        eprintln!("   Auth:      x-scopeon-token required for tiered endpoints");
+    }
     eprintln!("   Endpoints:");
     eprintln!("     GET /                    — browser dashboard (WebSocket live)");
     eprintln!("     GET /health              — always available");
@@ -177,10 +208,16 @@ pub async fn run_serve(
         eprintln!("     GET /api/v1/stats        — aggregate token & cost totals");
         eprintln!("     GET /api/v1/budget        — daily/weekly/monthly spend");
         eprintln!("     WS  /ws/v1/metrics        — live WebSocket metrics stream");
+        eprintln!("     GET /sse/v1/status        — IDE status stream (SSE, tier 1+)");
     }
     if tier >= 2 {
         eprintln!("     GET /api/v1/context       — context pressure (latest session)");
         eprintln!("     GET /api/v1/sessions      — per-session metadata");
+    }
+    if tier >= 3 {
+        eprintln!("     GET /api/v1/interactions  — detailed interaction provenance");
+        eprintln!("     GET /api/v1/tasks         — task and subagent history");
+        eprintln!("     GET /api/v1/provider-capabilities — provider provenance support matrix");
     }
     eprintln!();
 
@@ -216,15 +253,12 @@ async fn handle_dashboard() -> impl IntoResponse {
 /// §2.3: /metrics exposes aggregate cost and session data — equivalent to tier-1 data.
 /// Apply a tier-0 gate: return 403 with a hint when the server is configured to
 /// expose health only. This maintains the privacy guarantee even when serving LAN.
-async fn handle_prometheus(State(state): State<ServeState>) -> impl IntoResponse {
-    if state.tier < 1 {
-        return axum::response::Response::builder()
-            .status(axum::http::StatusCode::FORBIDDEN)
-            .body(axum::body::Body::from(
-                "Prometheus metrics require --tier 1 or higher. \
-                 Run `scopeon serve --tier 1` to enable.",
-            ))
-            .unwrap();
+async fn handle_prometheus(
+    State(state): State<ServeState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = tier_access_guard(&state, &headers, 1) {
+        return response;
     }
     let daily_usd_limit = state.config.budget.daily_usd;
     let result = with_db(&state.db, move |db| {
@@ -343,10 +377,22 @@ async fn handle_health(State(state): State<ServeState>) -> impl IntoResponse {
     }))
 }
 
+fn resolve_session_id_http(db: &Database, session_id: Option<&str>) -> anyhow::Result<String> {
+    match session_id {
+        Some(id) => Ok(id.to_string()),
+        None => db
+            .get_latest_session_id()?
+            .ok_or_else(|| anyhow::anyhow!("No sessions found.")),
+    }
+}
+
 /// `GET /api/v1/stats` — aggregate token & cost totals (tier ≥ 1).
-async fn handle_stats(State(state): State<ServeState>) -> impl IntoResponse {
-    if state.tier < 1 {
-        return tier_denied(1);
+async fn handle_stats(
+    State(state): State<ServeState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = tier_access_guard(&state, &headers, 1) {
+        return response;
     }
     let result = with_db(&state.db, move |db| {
         db.get_global_stats().map(|stats| {
@@ -371,9 +417,12 @@ async fn handle_stats(State(state): State<ServeState>) -> impl IntoResponse {
 }
 
 /// `GET /api/v1/budget` — daily/weekly/monthly spend (tier ≥ 1).
-async fn handle_budget(State(state): State<ServeState>) -> impl IntoResponse {
-    if state.tier < 1 {
-        return tier_denied(1);
+async fn handle_budget(
+    State(state): State<ServeState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = tier_access_guard(&state, &headers, 1) {
+        return response;
     }
     let result = with_db(&state.db, move |db| {
         db.get_daily_rollups(30).map(|rollups| {
@@ -415,11 +464,8 @@ async fn handle_sessions(
     State(state): State<ServeState>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    if state.tier < 2 {
-        return tier_denied(2);
-    }
-    if !check_secret(&state, &headers, 2) {
-        return unauthorized_response();
+    if let Some(response) = tier_access_guard(&state, &headers, 2) {
+        return response;
     }
     let result = with_db(&state.db, move |db| {
         db.list_sessions(20).map(|sessions| {
@@ -428,6 +474,8 @@ async fn handle_sessions(
                 .map(|s| {
                     json!({
                         "id":            s.id,
+                        "provider":      s.provider,
+                        "provider_version": s.provider_version,
                         "model":         s.model,
                         "project_name":  s.project_name,
                         "total_turns":   s.total_turns,
@@ -455,7 +503,7 @@ async fn handle_context(
     State(state): State<ServeState>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(response) = context_access_guard(&state, &headers) {
+    if let Some(response) = tier_access_guard(&state, &headers, 2) {
         return response;
     }
     let result = with_db(&state.db, move |db| {
@@ -496,6 +544,223 @@ async fn handle_context(
     }
 }
 
+/// `GET /api/v1/interactions` — detailed interaction provenance for a session (tier ≥ 3).
+async fn handle_interactions(
+    State(state): State<ServeState>,
+    Query(query): Query<SessionDetailQuery>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = tier_access_guard(&state, &headers, 3) {
+        return response;
+    }
+    let result = with_db(&state.db, move |db| {
+        let sid = resolve_session_id_http(db, query.session_id.as_deref())?;
+        let session = db
+            .get_session(&sid)?
+            .ok_or_else(|| anyhow::anyhow!("Session metadata unavailable."))?;
+        let capabilities = provider_capabilities(&session.provider);
+        let events = db.list_interaction_events_for_session(&sid, query.limit.unwrap_or(100))?;
+        let hook_effects = derive_hook_effects(&events);
+        let payload: Vec<Value> = events
+            .iter()
+            .map(|event| {
+                json!({
+                    "id": event.id,
+                    "timestamp": event.timestamp,
+                    "turn_id": event.turn_id,
+                    "task_run_id": event.task_run_id,
+                    "correlation_id": event.correlation_id,
+                    "parent_id": event.parent_id,
+                    "kind": event.kind,
+                    "phase": event.phase,
+                    "name": event.name,
+                    "display_name": event.display_name,
+                    "provider": event.provider,
+                    "status": event.status,
+                    "success": event.success,
+                    "hook_type": event.hook_type,
+                    "agent_type": event.agent_type,
+                    "execution_mode": event.execution_mode,
+                    "model": event.model,
+                    "mcp": {
+                        "server": event.mcp_server,
+                        "tool": event.mcp_tool,
+                    },
+                    "sizes": {
+                        "input_chars": event.input_size_chars,
+                        "output_chars": event.output_size_chars,
+                        "prompt_chars": event.prompt_size_chars,
+                        "summary_chars": event.summary_size_chars,
+                    },
+                    "tokens": {
+                        "total": event.total_tokens,
+                        "estimated_input": event.estimated_input_tokens,
+                        "estimated_output": event.estimated_output_tokens,
+                        "attributed_total": interaction_token_total(event),
+                        "confidence": event.confidence,
+                    },
+                    "duration_ms": event.duration_ms,
+                    "tool_calls": event.total_tool_calls,
+                    "hook_effect": hook_effects.get(&event.id),
+                })
+            })
+            .collect();
+        Ok(json!({
+            "session_id": sid,
+            "provider": {
+                "name": session.provider,
+                "version": session.provider_version,
+                "model": session.model,
+            },
+            "capabilities": capabilities,
+            "hook_effect_summary": {
+                "modified": hook_effects.values().filter(|effect| effect.as_str() == "modified").count(),
+                "blocked": hook_effects.values().filter(|effect| effect.as_str() == "blocked").count(),
+                "pass_through": hook_effects.values().filter(|effect| effect.as_str() == "pass_through").count(),
+            },
+            "count": payload.len(),
+            "events": payload,
+        }))
+    })
+    .await;
+    match result {
+        Ok(v) => json_response(v),
+        Err(e) => error_response(e),
+    }
+}
+
+/// `GET /api/v1/tasks` — task and subagent history for a session (tier ≥ 3).
+async fn handle_tasks(
+    State(state): State<ServeState>,
+    Query(query): Query<SessionDetailQuery>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = tier_access_guard(&state, &headers, 3) {
+        return response;
+    }
+    let result = with_db(&state.db, move |db| {
+        let sid = resolve_session_id_http(db, query.session_id.as_deref())?;
+        let session = db
+            .get_session(&sid)?
+            .ok_or_else(|| anyhow::anyhow!("Session metadata unavailable."))?;
+        let capabilities = provider_capabilities(&session.provider);
+        let tasks = db.list_recent_task_runs_for_session(&sid, query.limit.unwrap_or(25))?;
+        let events = db.list_interaction_events_for_session(&sid, 10_000)?;
+
+        let payload: Vec<Value> = tasks
+            .iter()
+            .map(|task| {
+                let task_events: Vec<_> = events
+                    .iter()
+                    .filter(|event| event.task_run_id.as_deref() == Some(task.id.as_str()))
+                    .collect();
+                let mut by_kind = std::collections::BTreeMap::<String, usize>::new();
+                let mut tools_used = std::collections::BTreeSet::<String>::new();
+                let mut mcp_tools_used = std::collections::BTreeSet::<String>::new();
+
+                for event in &task_events {
+                    *by_kind.entry(event.kind.clone()).or_default() += 1;
+                    if matches!(event.kind.as_str(), "tool" | "task" | "skill") {
+                        tools_used.insert(event.name.clone());
+                    }
+                    if event.kind == "mcp" {
+                        let label = match (&event.mcp_server, &event.mcp_tool) {
+                            (Some(server), Some(tool)) => format!("{server}.{tool}"),
+                            _ => event.name.clone(),
+                        };
+                        mcp_tools_used.insert(label);
+                    }
+                }
+
+                json!({
+                    "id": task.id,
+                    "correlation_id": task.correlation_id,
+                    "name": task.name,
+                    "display_name": task.display_name,
+                    "agent_type": task.agent_type,
+                    "execution_mode": task.execution_mode,
+                    "requested_model": task.requested_model,
+                    "actual_model": task.actual_model,
+                    "started_at": task.started_at,
+                    "completed_at": task.completed_at,
+                    "duration_ms": task.duration_ms,
+                    "success": task.success,
+                    "tokens": {
+                        "total": task.total_tokens,
+                        "confidence": task.confidence,
+                    },
+                    "tool_calls": task.total_tool_calls,
+                    "payload_sizes": {
+                        "description_chars": task.description_size_chars,
+                        "prompt_chars": task.prompt_size_chars,
+                        "summary_chars": task.summary_size_chars,
+                    },
+                    "interaction_summary": {
+                        "count": task_events.len(),
+                        "by_kind": by_kind,
+                        "tools_used": tools_used.into_iter().collect::<Vec<_>>(),
+                        "mcp_tools_used": mcp_tools_used.into_iter().collect::<Vec<_>>(),
+                    },
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "session_id": sid,
+            "provider": {
+                "name": session.provider,
+                "version": session.provider_version,
+                "model": session.model,
+            },
+            "capabilities": capabilities,
+            "count": payload.len(),
+            "tasks": payload,
+        }))
+    })
+    .await;
+    match result {
+        Ok(v) => json_response(v),
+        Err(e) => error_response(e),
+    }
+}
+
+/// `GET /api/v1/provider-capabilities` — provider provenance support matrix (tier ≥ 3).
+async fn handle_provider_capabilities(
+    State(state): State<ServeState>,
+    Query(query): Query<SessionDetailQuery>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = tier_access_guard(&state, &headers, 3) {
+        return response;
+    }
+    let result = with_db(&state.db, move |db| {
+        let sid = resolve_session_id_http(db, query.session_id.as_deref())?;
+        let session = db
+            .get_session(&sid)?
+            .ok_or_else(|| anyhow::anyhow!("Session metadata unavailable."))?;
+        let capabilities = provider_capabilities(&session.provider);
+        Ok(json!({
+            "session_id": sid,
+            "provider": {
+                "name": session.provider,
+                "version": session.provider_version,
+                "model": session.model,
+            },
+            "support_summary": {
+                "exact": capabilities.iter().filter(|c| c.level == "exact").count(),
+                "estimated": capabilities.iter().filter(|c| c.level == "estimated").count(),
+                "unsupported": capabilities.iter().filter(|c| c.level == "unsupported").count(),
+            },
+            "capabilities": capabilities,
+        }))
+    })
+    .await;
+    match result {
+        Ok(v) => json_response(v),
+        Err(e) => error_response(e),
+    }
+}
+
 // ── WebSocket handler ─────────────────────────────────────────────────────────
 
 /// `GET /ws/v1/metrics` — real-time WebSocket stream.
@@ -503,8 +768,12 @@ async fn handle_context(
 /// On connect, immediately sends one snapshot. Thereafter broadcasts every
 /// ~2 seconds when the background snapshot task publishes. Uses the same tier
 /// model as the REST endpoints (min tier 1).
-async fn handle_ws(ws: WebSocketUpgrade, State(state): State<ServeState>) -> impl IntoResponse {
-    if let Some(response) = ws_access_guard(&state) {
+async fn handle_ws(
+    ws: WebSocketUpgrade,
+    State(state): State<ServeState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = ws_access_guard(&state, &headers) {
         return response;
     }
     ws.on_upgrade(move |socket| ws_handler(socket, state))
@@ -549,6 +818,99 @@ async fn ws_handler(mut socket: WebSocket, state: ServeState) {
             }
         }
     }
+}
+
+/// `GET /sse/v1/status` — Server-Sent Events stream for IDE extensions and lightweight clients.
+///
+/// S-4 (TRIZ): resolves TC-B3 (Observability vs. Agent Token Budget) by delivering
+/// real-time context-pressure status to IDEs using SSE — a persistent HTTP connection
+/// that sends compact events without the agent spending any tokens to poll.
+///
+/// Each event is a compact JSON object (fill_pct, daily_cost_usd, cache_hit_rate_pct,
+/// should_compact, predicted_turns_remaining). Powered by the same broadcast channel
+/// as the WebSocket endpoint — zero additional DB queries after initial connection.
+///
+/// Requires tier ≥ 1. Respects the same `x-scopeon-token` auth header as other
+/// tiered endpoints.
+async fn handle_sse_status(
+    State(state): State<ServeState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = tier_access_guard(&state, &headers, 1) {
+        return response;
+    }
+
+    let mut rx = state.ws_tx.subscribe();
+
+    // Build a compact status object from the full WS snapshot.
+    fn extract_status(snap: &Value) -> Value {
+        let data = snap.get("data").unwrap_or(snap);
+        let fill_pct = data
+            .pointer("/context_pressure/fill_pct")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let daily_cost = data
+            .pointer("/budget_status/daily_spent")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let cache_hit = data
+            .pointer("/cache_efficiency/cache_hit_rate")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let predicted = data
+            .pointer("/context_pressure/predicted_turns_remaining")
+            .and_then(Value::as_i64);
+        let should_compact = fill_pct >= 80.0;
+        serde_json::json!({
+            "fill_pct": (fill_pct * 10.0).round() / 10.0,
+            "daily_cost_usd": (daily_cost * 10000.0).round() / 10000.0,
+            "cache_hit_rate_pct": (cache_hit * 10.0).round() / 10.0,
+            "predicted_turns_remaining": predicted,
+            "should_compact": should_compact,
+        })
+    }
+
+    // Send one immediate event on connect using the current WS broadcast value.
+    let initial_json = match state.db.lock() {
+        Ok(g) => {
+            let snap = build_ws_snapshot(&g, &state.config);
+            serde_json::to_string(&extract_status(&snap)).unwrap_or_default()
+        },
+        Err(_) => String::new(),
+    };
+
+    // Channel to pipe events into the SSE body stream.
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    if !initial_json.is_empty() {
+        let _ = event_tx.send(initial_json);
+    }
+
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(json_str) => {
+                    if let Ok(snap) = serde_json::from_str::<Value>(&json_str) {
+                        let status = serde_json::to_string(&extract_status(&snap))
+                            .unwrap_or_default();
+                        if event_tx.send(status).is_err() {
+                            break;
+                        }
+                    }
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    // Convert the unbounded receiver into a byte stream formatted as SSE.
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(event_rx)
+        .map(|data| Ok::<Event, std::convert::Infallible>(Event::default().data(data)));
+
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
 }
 
 /// Build the JSON payload sent over the WebSocket snapshot channel.
@@ -743,22 +1105,22 @@ fn unauthorized_response() -> axum::response::Response {
         .into_response()
 }
 
-fn ws_access_guard(state: &ServeState) -> Option<axum::response::Response> {
-    if state.tier < 1 {
-        Some(tier_denied(1))
-    } else {
-        None
-    }
-}
-
-fn context_access_guard(
+fn ws_access_guard(
     state: &ServeState,
     headers: &axum::http::HeaderMap,
 ) -> Option<axum::response::Response> {
-    if state.tier < 2 {
-        return Some(tier_denied(2));
+    tier_access_guard(state, headers, 1)
+}
+
+fn tier_access_guard(
+    state: &ServeState,
+    headers: &axum::http::HeaderMap,
+    required_tier: u8,
+) -> Option<axum::response::Response> {
+    if state.tier < required_tier {
+        return Some(tier_denied(required_tier));
     }
-    if !check_secret(state, headers, 2) {
+    if !check_secret(state, headers, required_tier) {
         return Some(unauthorized_response());
     }
     None
@@ -775,9 +1137,22 @@ fn check_secret(state: &ServeState, headers: &axum::http::HeaderMap, required_ti
         Some(expected) => headers
             .get("x-scopeon-token")
             .and_then(|v| v.to_str().ok())
-            .map(|v| v == expected.as_str())
+            .map(|v| constant_time_eq(v, expected))
             .unwrap_or(false),
     }
+}
+
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    let max_len = a_bytes.len().max(b_bytes.len());
+    let mut diff: usize = a_bytes.len() ^ b_bytes.len();
+    for i in 0..max_len {
+        let lhs = *a_bytes.get(i).unwrap_or(&0);
+        let rhs = *b_bytes.get(i).unwrap_or(&0);
+        diff |= (lhs ^ rhs) as usize;
+    }
+    diff == 0
 }
 
 #[cfg(test)]
@@ -799,26 +1174,38 @@ mod tests {
 
     #[test]
     fn websocket_stream_requires_tier_one() {
-        let denied = ws_access_guard(&test_state(0, None)).unwrap();
+        let denied = ws_access_guard(&test_state(0, None), &HeaderMap::new()).unwrap();
         assert_eq!(denied.status(), StatusCode::FORBIDDEN);
-        assert!(ws_access_guard(&test_state(1, None)).is_none());
+        assert!(ws_access_guard(&test_state(1, None), &HeaderMap::new()).is_none());
     }
 
     #[test]
     fn context_endpoint_requires_tier_two() {
-        let denied = context_access_guard(&test_state(1, None), &HeaderMap::new()).unwrap();
+        let denied = tier_access_guard(&test_state(1, None), &HeaderMap::new(), 2).unwrap();
         assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn tier_one_endpoint_requires_matching_secret_when_configured() {
+        let state = test_state(1, Some("secret-token"));
+
+        let unauthorized = tier_access_guard(&state, &HeaderMap::new(), 1).unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-scopeon-token", HeaderValue::from_static("secret-token"));
+        assert!(tier_access_guard(&state, &headers, 1).is_none());
     }
 
     #[test]
     fn context_endpoint_requires_matching_secret_when_configured() {
         let state = test_state(2, Some("secret-token"));
 
-        let unauthorized = context_access_guard(&state, &HeaderMap::new()).unwrap();
+        let unauthorized = tier_access_guard(&state, &HeaderMap::new(), 2).unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
         let mut headers = HeaderMap::new();
         headers.insert("x-scopeon-token", HeaderValue::from_static("secret-token"));
-        assert!(context_access_guard(&state, &headers).is_none());
+        assert!(tier_access_guard(&state, &headers, 2).is_none());
     }
 }

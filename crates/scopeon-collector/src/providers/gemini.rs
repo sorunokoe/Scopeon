@@ -191,6 +191,8 @@ impl Provider for GeminiCLIProvider {
                 project: self.root.to_string_lossy().to_string(),
                 project_name: format!("gemini-{project_hash}"),
                 slug: file_stem.to_string(),
+                provider: "gemini-cli".to_string(),
+                provider_version: String::new(),
                 model: model.clone(),
                 git_branch: String::new(),
                 started_at,

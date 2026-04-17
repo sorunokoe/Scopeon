@@ -19,6 +19,7 @@ mod git_hook;
 mod onboarding;
 mod serve;
 mod shell_hook;
+mod team;
 
 /// Acquire the database lock, propagating a clear error if the mutex is poisoned.
 /// A poisoned mutex means a thread panicked while holding the lock — the database
@@ -88,9 +89,9 @@ enum Commands {
         /// Only enable this if you intentionally want teammates to access your data.
         #[arg(long, default_value = "false")]
         lan: bool,
-        /// Shared secret token required for tier ≥ 2 endpoints.
+        /// Shared secret token for tiered endpoints.
         /// Callers must pass `x-scopeon-token: <secret>` header.
-        /// Recommended when using --lan to prevent unauthorized data access.
+        /// Required when using `--lan` with `--tier 1` or higher.
         #[arg(long)]
         secret: Option<String>,
     },
@@ -189,6 +190,23 @@ enum Commands {
     /// Called automatically by the git hook installed via `scopeon git-hook install`.
     /// Outputs a single line: `AI-Cost: $X.XX (N turns, Nk tokens, N% cache)`
     GitTrailer,
+    /// Show per-author AI cost breakdown from git commit history.
+    ///
+    /// Reads `AI-Cost:` trailers that `scopeon git-hook install` writes into each
+    /// commit message, then aggregates cost by author email. No data leaves your
+    /// machine — all computation is local to your git repository.
+    ///
+    /// Requires git to be installed and the current directory to be inside a repo
+    /// where team members have been using `scopeon git-hook install`.
+    ///
+    ///   scopeon team              # last 30 days (default)
+    ///   scopeon team --days 7     # last week
+    ///   scopeon team --days 90    # last quarter
+    Team {
+        /// Number of days of git history to include (default: 30).
+        #[arg(long, short, default_value = "30")]
+        days: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -359,29 +377,42 @@ async fn main() -> Result<()> {
 
     match cli.command.unwrap_or(Commands::Start) {
         Commands::Start => {
-            let providers = build_providers(&user_config);
-            // 1. Backfill historical data via providers
+            let providers_backfill = build_providers(&user_config);
+
+            // 1. Quick onboarding check before TUI opens.
+            //    Pass whether any provider has data files so we don't show the
+            //    wizard to users whose DB is empty only because backfill hasn't
+            //    run yet.
+            let has_provider_data = providers_backfill.iter().any(|p| p.is_available());
             {
                 let db = db
                     .lock()
                     .map_err(|_| anyhow::anyhow!("Database mutex poisoned — restart Scopeon"))?;
-                watcher::backfill_providers(&providers, &db)?;
+                onboarding::run_wizard_if_needed(&db, has_provider_data)?;
             }
-            // 2. First-run onboarding wizard (no-op if already onboarded or DB has data)
-            {
-                let db = db
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("Database mutex poisoned — restart Scopeon"))?;
-                onboarding::run_wizard_if_needed(&db)?;
-            }
+
+            // 2. Backfill in background — releases the DB mutex between files so
+            //    the TUI can refresh while historical data loads.  This makes the
+            //    TUI open immediately instead of waiting for all files to be parsed.
+            let db_backfill = db.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = watcher::backfill_providers_arc(&providers_backfill, db_backfill) {
+                    tracing::error!("Backfill failed: {}", e);
+                }
+            });
+
             // 3. Start provider-based watcher in background
+            let providers_watcher = build_providers(&user_config);
             let db_watcher = db.clone();
             tokio::spawn(async move {
-                if let Err(e) = watcher::start_watching_providers(providers, db_watcher).await {
+                if let Err(e) =
+                    watcher::start_watching_providers(providers_watcher, db_watcher).await
+                {
                     tracing::error!("Watcher error: {}", e);
                 }
             });
-            // 4. Open TUI
+
+            // 4. Open TUI immediately
             scopeon_tui::run_tui(db).await?;
         },
 
@@ -575,6 +606,9 @@ async fn main() -> Result<()> {
         Commands::GitTrailer => {
             let db = lock_db(&db)?;
             git_hook::print_trailer(&db)?;
+        },
+        Commands::Team { days } => {
+            team::cmd_team_report(days)?;
         },
     }
 

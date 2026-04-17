@@ -196,6 +196,8 @@ fn scan_openai_file(file: &std::path::Path, db: &Database) -> Result<usize> {
         project: "generic".to_string(),
         project_name: file_name.clone(),
         slug: file_name.trim_end_matches(".jsonl").to_string(),
+        provider: "generic-openai".to_string(),
+        provider_version: String::new(),
         model: turns.first().map(|t| t.model.clone()).unwrap_or_default(),
         git_branch: String::new(),
         started_at: first_ts,

@@ -19,7 +19,11 @@ pub mod suggestions;
 pub mod thresholds;
 pub mod waste;
 
-pub use health::{compute_health_score, compute_health_score_with_breakdown, HealthBreakdown};
+pub use health::{
+    classify_project_profile, compute_health_score, compute_health_score_adaptive,
+    compute_health_score_with_breakdown, AdaptiveHealthBreakdown, HealthBreakdown,
+    ProjectProfile, WeightSet,
+};
 pub use metric::{Metric, MetricCategory, MetricContext, MetricValue};
 pub use registry::MetricRegistry;
 pub use suggestions::{compute_suggestions, Suggestion};

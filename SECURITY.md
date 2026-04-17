@@ -58,7 +58,8 @@ Scopeon is a **local-first** observability tool designed to keep AI usage data o
 - **Tier 1** — aggregate metrics
 - **Tier 2+** — per-session metadata and context endpoints
 
-If you pass `--secret`, Scopeon requires `x-scopeon-token` for tier 2+ REST endpoints.
+If you pass `--secret`, Scopeon requires `x-scopeon-token` for tiered REST and WebSocket endpoints.
+When using `--lan`, tier 1+ requires `--secret`.
 
 ### File system access
 
@@ -67,10 +68,10 @@ Scopeon reads files in the following directories (based on `[providers] enabled`
 | Provider | Path read |
 |---|---|
 | Claude Code | `~/.claude/projects/` |
-| GitHub Copilot CLI | `~/.config/github-copilot/` |
-| Aider | `~/.aider/logs/` |
-| Cursor | `~/.cursor/logs/` |
-| Gemini CLI | `~/.gemini/logs/` |
+| GitHub Copilot CLI | `~/.copilot/session-state/` |
+| Aider | `~/.aider/analytics.jsonl` |
+| Cursor | Cursor app + `Cursor/User/globalStorage` (detection only) |
+| Gemini CLI | `~/.gemini/tmp/` |
 | Generic OpenAI | User-configured `generic_paths` |
 
 The database is created at `~/.scopeon/scopeon.db` with standard user file permissions. No data is written to provider directories.

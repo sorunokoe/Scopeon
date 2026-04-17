@@ -100,6 +100,8 @@ impl Provider for OllamaProvider {
                 project: "ollama".to_string(),
                 project_name: title.clone(),
                 slug: slug_from_title(&title),
+                provider: "ollama".to_string(),
+                provider_version: String::new(),
                 model: messages
                     .iter()
                     .find(|m| m.1 == "assistant")

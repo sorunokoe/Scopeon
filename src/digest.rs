@@ -16,7 +16,7 @@
 
 use std::fmt::Write as _;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use scopeon_core::Database;
 
 /// Run the digest command: print the Markdown report and optionally post it
@@ -51,8 +51,8 @@ fn post_webhook(url: &str, markdown: &str, kind: WebhookKind) -> Result<()> {
         WebhookKind::Discord => 1_950,
         WebhookKind::Slack => 39_000,
     };
-    let body_text = if markdown.len() > limit {
-        let truncated = &markdown[..limit];
+    let body_text = if markdown.chars().count() > limit {
+        let truncated = truncate_with_ellipsis(markdown, limit);
         format!("{truncated}\n\n*[Report truncated — run `scopeon digest` locally for the full version]*")
     } else {
         markdown.to_string()
@@ -80,22 +80,29 @@ fn post_webhook(url: &str, markdown: &str, kind: WebhookKind) -> Result<()> {
             &payload,
             url,
         ])
-        .output();
+        .output()
+        .with_context(|| format!("Could not execute curl for {label} webhook"))?;
 
-    match status {
-        Ok(out) => {
-            let code = String::from_utf8_lossy(&out.stdout);
-            let code_num: u16 = code.trim().parse().unwrap_or(0);
-            if (200..300).contains(&code_num) {
-                eprintln!("✓ Digest posted to {label} (HTTP {code_num})");
-            } else {
-                eprintln!("⚠ {label} webhook returned HTTP {code_num}. Check the webhook URL.");
-            }
-        },
-        Err(e) => {
-            eprintln!("⚠ Could not post to {label}: {e}");
-            eprintln!("  Is `curl` installed? Run `which curl` to check.");
-        },
+    if !status.status.success() {
+        let stderr = String::from_utf8_lossy(&status.stderr);
+        anyhow::bail!(
+            "{label} webhook post failed (curl status: {}): {}",
+            status.status,
+            stderr.trim()
+        );
+    }
+
+    let code = String::from_utf8_lossy(&status.stdout);
+    let code_num: u16 = code.trim().parse().with_context(|| {
+        format!(
+            "Invalid HTTP status code from {label} webhook: '{}'",
+            code.trim()
+        )
+    })?;
+    if (200..300).contains(&code_num) {
+        eprintln!("✓ Digest posted to {label} (HTTP {code_num})");
+    } else {
+        anyhow::bail!("{label} webhook returned HTTP {code_num}. Check the webhook URL.");
     }
 
     Ok(())
@@ -122,14 +129,14 @@ fn build_report(db: &Database, days: i64) -> Result<String> {
     let total_cost: f64 = rollups.iter().map(|r| r.estimated_cost_usd).sum();
     let total_input: i64 = rollups.iter().map(|r| r.total_input_tokens).sum();
     let total_cache_read: i64 = rollups.iter().map(|r| r.total_cache_read_tokens).sum();
-    let _total_cache_write: i64 = rollups.iter().map(|r| r.total_cache_write_tokens).sum();
+    let total_cache_write: i64 = rollups.iter().map(|r| r.total_cache_write_tokens).sum();
     let total_output: i64 = rollups.iter().map(|r| r.total_output_tokens).sum();
     let total_turns: i64 = rollups.iter().map(|r| r.turn_count).sum();
     let total_sessions: i64 = rollups.iter().map(|r| r.session_count).sum();
     let total_mcp: i64 = rollups.iter().map(|r| r.total_mcp_calls).sum();
 
     // Cache hit rate for period.
-    let total_tokens_used = total_input + total_cache_read;
+    let total_tokens_used = total_input + total_cache_read + total_cache_write;
     let cache_hit_rate = if total_tokens_used > 0 {
         total_cache_read as f64 / total_tokens_used as f64 * 100.0
     } else {
@@ -195,7 +202,8 @@ fn build_report(db: &Database, days: i64) -> Result<String> {
         writeln!(out, "| Date | Cost | Sessions | Turns | Cache Hit | MCP |")?;
         writeln!(out, "|------|------|----------|-------|-----------|-----|")?;
         for day in &rollups {
-            let day_tokens = day.total_input_tokens + day.total_cache_read_tokens;
+            let day_tokens =
+                day.total_input_tokens + day.total_cache_read_tokens + day.total_cache_write_tokens;
             let day_cache_pct = if day_tokens > 0 {
                 day.total_cache_read_tokens as f64 / day_tokens as f64 * 100.0
             } else {
@@ -342,10 +350,30 @@ fn build_report(db: &Database, days: i64) -> Result<String> {
     Ok(out)
 }
 
-fn shorten_model(model: &str) -> &str {
-    if model.len() > 20 {
-        &model[..20]
-    } else {
-        model
+fn shorten_model(model: &str) -> String {
+    model.chars().take(20).collect()
+}
+
+fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
     }
+
+    let mut iter = input.chars();
+    let mut prefix = String::new();
+
+    for _ in 0..max_chars {
+        match iter.next() {
+            Some(ch) => prefix.push(ch),
+            None => return prefix,
+        }
+    }
+
+    if iter.next().is_none() {
+        return prefix;
+    }
+
+    let mut out: String = prefix.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }

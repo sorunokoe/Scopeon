@@ -211,11 +211,11 @@ fn draw_page_welcome(f: &mut Frame, theme: Theme, area: Rect) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  Your dashboard has been pre-loaded with demo data so you",
+            "  Scopeon starts empty on purpose so it only reflects real",
             Style::default().fg(theme.muted_color()),
         )),
         Line::from(Span::styled(
-            "  can explore every feature right now, before any AI session.",
+            "  observed sessions. Run a detected tool and it will populate.",
             Style::default().fg(theme.muted_color()),
         )),
     ];

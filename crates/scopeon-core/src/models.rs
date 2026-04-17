@@ -22,6 +22,10 @@ pub struct Session {
     pub project: String,
     pub project_name: String,
     pub slug: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub provider_version: String,
     pub model: String,
     pub git_branch: String,
     pub started_at: i64,
@@ -78,6 +82,79 @@ pub struct ToolCall {
     pub timestamp: i64,
 }
 
+/// A normalized interaction event emitted by a provider log.
+///
+/// Interaction events capture higher-level provenance that cannot be represented by
+/// turn totals alone: skills, hooks, MCP/tool start/end, tasks, subagents, plan changes,
+/// notifications, and similar lifecycle events.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InteractionEvent {
+    pub id: String,
+    pub session_id: String,
+    pub turn_id: Option<String>,
+    pub task_run_id: Option<String>,
+    pub correlation_id: Option<String>,
+    pub parent_id: Option<String>,
+    pub provider: String,
+    pub timestamp: i64,
+    pub kind: String,
+    pub phase: String,
+    pub name: String,
+    pub display_name: Option<String>,
+    pub mcp_server: Option<String>,
+    pub mcp_tool: Option<String>,
+    pub hook_type: Option<String>,
+    pub agent_type: Option<String>,
+    pub execution_mode: Option<String>,
+    pub model: Option<String>,
+    pub status: Option<String>,
+    pub success: Option<bool>,
+    pub input_size_chars: i64,
+    pub output_size_chars: i64,
+    pub prompt_size_chars: i64,
+    pub summary_size_chars: i64,
+    pub total_tokens: Option<i64>,
+    pub total_tool_calls: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub estimated_input_tokens: i64,
+    pub estimated_output_tokens: i64,
+    pub estimated_cost_usd: f64,
+    pub confidence: String,
+}
+
+/// A task/subagent run derived from tool lifecycle and session completion events.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TaskRun {
+    pub id: String,
+    pub session_id: String,
+    pub correlation_id: Option<String>,
+    pub name: String,
+    pub display_name: Option<String>,
+    pub agent_type: String,
+    pub execution_mode: String,
+    pub requested_model: Option<String>,
+    pub actual_model: Option<String>,
+    pub started_at: i64,
+    pub completed_at: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub success: Option<bool>,
+    pub total_tokens: Option<i64>,
+    pub total_tool_calls: Option<i64>,
+    pub description_size_chars: i64,
+    pub prompt_size_chars: i64,
+    pub summary_size_chars: i64,
+    pub confidence: String,
+}
+
+/// Describes what level of provenance is actually available for a provider.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderCapability {
+    pub provider: String,
+    pub capability: String,
+    pub level: String,
+    pub note: String,
+}
+
 /// Lightweight per-session cost+cache summary for the sessions list view.
 /// Computed by a single GROUP BY query, so it's fast even for hundreds of sessions.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -100,8 +177,8 @@ pub struct DailyRollup {
     pub session_count: i64,
     pub turn_count: i64,
     pub estimated_cost_usd: f64,
-    /// Average health score for the day (0.0–100.0). Populated by the TUI on each refresh.
-    /// TRIZ D6: enables health trend sparkline and ML-based health forecasting.
+    /// Optional daily health-rollup value (0.0–100.0).
+    /// Current read paths compute health live and must not mutate this field.
     pub health_score_avg: f64,
 }
 

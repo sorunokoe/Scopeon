@@ -33,21 +33,153 @@
 //!
 //! ## Waste penalty (0–20 pts)
 //! ```text
-//! waste_pts = (1.0 − waste.waste_score) * 20.0   (waste_score ∈ [0.0, 1.0])
+//! waste_pts = (1.0 − waste.waste_score / 100.0) * 20.0   (waste_score ∈ [0.0, 100.0])
 //! ```
 //! Presence of detected waste signals (duplicate calls, oversized context, etc.)
 //! reduces this component. Zero waste earns the full 20 pts.
 //!
-//! ## Daily rollup EMA (for sparklines / historical scores)
-//! The daily health score is stored in `daily_rollup.health_score_avg` using a
-//! 70/30 exponential moving average:
-//! ```text
-//! new_avg = 0.70 × today_score + 0.30 × prior_avg
-//! ```
-//! (First day uses today's score as the initial value.)
+//! ## Historical persistence
+//! This module computes health scores in memory only.
+//! If `daily_rollup.health_score_avg` is populated, it must come from an ingest-time
+//! or offline rollup path, never from a render loop or other read path.
 
 use crate::{metric::MetricContext, waste::WasteReport};
 use scopeon_core::{cache_hit_rate, context_window_for_model};
+
+// ── S-5: Self-calibrating adaptive weight system (TRIZ PC-5 resolution) ──────
+
+/// Project profile inferred from session behaviour.
+/// Determines which health-score weight preset is used so that scores are
+/// meaningful for the current workflow rather than a one-size-fits-all average.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectProfile {
+    /// High cache reuse (≥ 60% of tokens come from the cache read slot).
+    CacheHeavy,
+    /// Deep reasoning (thinking tokens ≥ 30% of output).
+    Exploration,
+    /// Dense tool use (≥ 5 MCP calls per turn on average).
+    ToolHeavy,
+    /// Mixed / default workload.
+    Balanced,
+}
+
+/// Per-profile health-score weights (must sum to 100).
+pub struct WeightSet {
+    pub cache: f64,
+    pub context: f64,
+    pub cost: f64,
+    pub waste: f64,
+}
+
+impl WeightSet {
+    pub fn for_profile(p: ProjectProfile) -> Self {
+        match p {
+            // CacheHeavy: cache is the primary value-driver — reward it heavily.
+            ProjectProfile::CacheHeavy => WeightSet { cache: 40.0, context: 20.0, cost: 20.0, waste: 20.0 },
+            // Exploration: thinking tokens consume budget fast — context & waste matter most.
+            ProjectProfile::Exploration => WeightSet { cache: 15.0, context: 30.0, cost: 20.0, waste: 35.0 },
+            // ToolHeavy: many short calls accumulate cost quickly — penalise spend and waste.
+            ProjectProfile::ToolHeavy => WeightSet { cache: 25.0, context: 20.0, cost: 30.0, waste: 25.0 },
+            // Balanced: mild upgrade to cache vs historical baseline (still rewards good caching).
+            ProjectProfile::Balanced => WeightSet { cache: 30.0, context: 25.0, cost: 25.0, waste: 20.0 },
+        }
+    }
+}
+
+/// Classify the current session into a `ProjectProfile`.
+pub fn classify_project_profile(ctx: &MetricContext) -> ProjectProfile {
+    let total_input: i64 = ctx.turns.iter().map(|t| t.input_tokens).sum();
+    let cache_read: i64 = ctx.turns.iter().map(|t| t.cache_read_tokens).sum();
+    let cache_write: i64 = ctx.turns.iter().map(|t| t.cache_write_tokens).sum();
+    let total_output: i64 = ctx.turns.iter().map(|t| t.output_tokens).sum();
+
+    let denominator = (total_input + cache_read + cache_write).max(1);
+    let cache_intensity = cache_read as f64 / denominator as f64;
+
+    // thinking_frac: thinking tokens are not stored per turn, but deeply-reasoning
+    // sessions typically produce proportionally more output relative to input.
+    // Use output / (input + cache_read) as a cheap proxy.
+    let thinking_frac = if total_input + cache_read > 0 {
+        total_output as f64 / (total_input + cache_read) as f64
+    } else {
+        0.0
+    };
+
+    let turns_count = ctx.turns.len().max(1);
+    let mcp_density = ctx.tool_calls.len() as f64 / turns_count as f64;
+
+    if cache_intensity > 0.60 {
+        ProjectProfile::CacheHeavy
+    } else if thinking_frac > 2.5 {
+        // Output > 2.5× input is a strong signal of extended thinking/exploration.
+        ProjectProfile::Exploration
+    } else if mcp_density > 5.0 {
+        ProjectProfile::ToolHeavy
+    } else {
+        ProjectProfile::Balanced
+    }
+}
+
+/// Adaptive health score breakdown with profile-specific maxima.
+pub struct AdaptiveHealthBreakdown {
+    pub profile: ProjectProfile,
+    pub weights: WeightSet,
+    pub cache_pts: f64,
+    pub context_pts: f64,
+    pub cost_pts: f64,
+    pub waste_pts: f64,
+    pub total: f64,
+}
+
+impl AdaptiveHealthBreakdown {
+    pub fn as_rows(&self) -> [(&'static str, f64, f64); 4] {
+        [
+            ("Cache", self.cache_pts, self.weights.cache),
+            ("Context", self.context_pts, self.weights.context),
+            ("Cost eff", self.cost_pts, self.weights.cost),
+            ("Waste", self.waste_pts, self.weights.waste),
+        ]
+    }
+
+    pub fn profile_label(&self) -> &'static str {
+        match self.profile {
+            ProjectProfile::CacheHeavy => "Cache-Heavy",
+            ProjectProfile::Exploration => "Exploration",
+            ProjectProfile::ToolHeavy => "Tool-Heavy",
+            ProjectProfile::Balanced => "Balanced",
+        }
+    }
+}
+
+/// Compute health score with adaptive weights calibrated to the project profile.
+///
+/// Preferred over `compute_health_score` for the MCP and TUI insights paths.
+pub fn compute_health_score_adaptive(
+    ctx: &MetricContext,
+    waste: &WasteReport,
+) -> (f64, AdaptiveHealthBreakdown) {
+    let profile = classify_project_profile(ctx);
+    let w = WeightSet::for_profile(profile);
+
+    let cache_pts = (cache_score(ctx) / 30.0 * w.cache).clamp(0.0, w.cache);
+    let context_pts = (context_score(ctx) / 25.0 * w.context).clamp(0.0, w.context);
+    let cost_pts = (cost_score(ctx) / 25.0 * w.cost).clamp(0.0, w.cost);
+    let waste_pts = (waste_score_pts(waste) / 20.0 * w.waste).clamp(0.0, w.waste);
+    let total = (cache_pts + context_pts + cost_pts + waste_pts).clamp(0.0, 100.0);
+
+    (
+        total,
+        AdaptiveHealthBreakdown {
+            profile,
+            weights: WeightSet::for_profile(profile),
+            cache_pts,
+            context_pts,
+            cost_pts,
+            waste_pts,
+            total,
+        },
+    )
+}
 
 /// Compute a 0–100 health score from the current session context.
 pub fn compute_health_score(ctx: &MetricContext, waste: &WasteReport) -> f64 {
@@ -122,7 +254,7 @@ fn cache_score(ctx: &MetricContext) -> f64 {
 fn context_score(ctx: &MetricContext) -> f64 {
     let last = ctx.turns.last();
     let used = last
-        .map(|t| t.input_tokens + t.cache_read_tokens + t.cache_write_tokens)
+        .map(|t| t.input_tokens + t.cache_read_tokens)
         .unwrap_or(0);
     let model = ctx
         .turns
@@ -143,23 +275,9 @@ fn cost_score(ctx: &MetricContext) -> f64 {
     if total_cost <= 0.0 || total_output == 0 {
         return 15.0; // neutral
     }
-    // Output tokens per dollar
-    let efficiency = total_output as f64 / total_cost;
-    // Baseline: ~33k output tokens per dollar at Sonnet pricing
-    // >50k = excellent, 20-50k = good, 5-20k = ok, <5k = expensive
-    if efficiency > 200_000.0 {
-        25.0
-    } else if efficiency > 50_000.0 {
-        22.0
-    } else if efficiency > 20_000.0 {
-        17.0
-    } else if efficiency > 5_000.0 {
-        12.0
-    } else if efficiency > 1_000.0 {
-        6.0
-    } else {
-        2.0
-    }
+    let output_per_dollar = total_output as f64 / total_cost;
+    let baseline = 50_000.0_f64;
+    ((output_per_dollar / baseline).min(1.0) * 25.0).clamp(0.0, 25.0)
 }
 
 /// Waste signal penalty: 0–20 pts (inverse of waste score)

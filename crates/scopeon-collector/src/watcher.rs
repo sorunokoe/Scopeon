@@ -99,6 +99,9 @@ pub fn process_file(file_path: &Path, db: &Database) -> Result<()> {
     for tc in &result.tool_calls {
         db.upsert_tool_call(tc)?;
     }
+    for event in &result.interaction_events {
+        db.upsert_interaction_event(event)?;
+    }
 
     // §7.3: After turns are inserted, update session.total_turns from the authoritative
     // COUNT(*) query rather than trusting the parser's local counter.
@@ -175,6 +178,34 @@ pub fn backfill_providers(providers: &[Box<dyn Provider>], db: &Database) -> Res
     Ok(())
 }
 
+/// Background-friendly backfill: acquires the DB mutex per provider scan (or per
+/// file for providers that override `scan_incremental`) so the TUI can refresh
+/// in the gaps between lock acquisitions.
+///
+/// Use this instead of [`backfill_providers`] when the TUI is already running.
+pub fn backfill_providers_arc(
+    providers: &[Box<dyn Provider>],
+    db: Arc<Mutex<Database>>,
+) -> Result<()> {
+    info!("Starting background provider backfill");
+    let mut total = 0;
+    for provider in providers {
+        if !provider.is_available() {
+            info!("Provider '{}' not available, skipping", provider.name());
+            continue;
+        }
+        match provider.scan_incremental(db.clone()) {
+            Ok(n) => {
+                info!("Provider '{}' scanned {} items", provider.name(), n);
+                total += n;
+            },
+            Err(e) => warn!("Provider '{}' scan error: {}", provider.name(), e),
+        }
+    }
+    info!("Background backfill complete: {} items processed", total);
+    Ok(())
+}
+
 /// Watch paths from all providers and dispatch on file changes.
 pub async fn start_watching_providers(
     providers: Vec<Box<dyn Provider>>,
@@ -237,7 +268,9 @@ pub async fn start_watching_providers(
         let db = db.clone();
         let providers = providers.clone();
         let provider_watch_paths = provider_watch_paths.clone();
-        tokio::task::spawn_blocking(move || {
+        // Run one scan batch at a time so repeated file events cannot pile up
+        // overlapping full-provider rescans against the same SQLite mutex.
+        let worker = tokio::task::spawn_blocking(move || {
             let db = match db.lock() {
                 Ok(guard) => guard,
                 Err(_) => {
@@ -261,6 +294,9 @@ pub async fn start_watching_providers(
                 }
             }
         });
+        if let Err(e) = worker.await {
+            error!("Watcher scan batch join error: {}", e);
+        }
     }
 
     Ok(())

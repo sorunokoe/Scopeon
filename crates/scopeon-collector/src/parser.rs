@@ -9,7 +9,7 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use scopeon_core::cost::calculate_turn_cost;
-use scopeon_core::models::{fnv1a_64, Session, ToolCall, Turn};
+use scopeon_core::models::{fnv1a_64, InteractionEvent, Session, ToolCall, Turn};
 
 // ── Raw JSONL deserialization types ──────────────────────────────────────────
 
@@ -21,13 +21,12 @@ struct RawEntry {
     session_id: Option<String>,
     cwd: Option<String>,
     slug: Option<String>,
+    version: Option<String>,
     #[serde(rename = "gitBranch")]
     git_branch: Option<String>,
     timestamp: Option<String>,
     #[serde(rename = "durationMs")]
     duration_ms: Option<i64>,
-    #[serde(rename = "agentId")]
-    agent_id: Option<String>,
     message: Option<Value>,
     /// §8.2: Some AI coding tools log the API request max_tokens alongside the response.
     /// Claude Code may surface this as top-level `maxTokens` or in a request metadata field.
@@ -61,11 +60,13 @@ struct ContentAnalysis {
     mcp_input_token_est: i64,
     text_output_tokens: i64,
     tool_calls: Vec<ToolCall>,
+    interaction_events: Vec<InteractionEvent>,
 }
 pub struct ParseResult {
     pub session: Option<Session>,
     pub turns: Vec<Turn>,
     pub tool_calls: Vec<ToolCall>,
+    pub interaction_events: Vec<InteractionEvent>,
     pub new_offset: u64,
 }
 
@@ -83,11 +84,28 @@ pub fn parse_file_incremental(
     let mut session: Option<Session> = None;
     let mut turns: Vec<Turn> = Vec::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut interaction_events: Vec<InteractionEvent> = Vec::new();
     let mut turn_index: i64 = start_turn_index;
     let mut current_offset = from_offset;
     // IS-A: track msg_id → index in `turns` to deduplicate streaming records
     // (Claude Code emits 2-4 records per assistant turn with increasing output_tokens)
     let mut seen_msg_ids: HashMap<String, usize> = HashMap::new();
+
+    // Detect whether this JSONL file belongs to a subagent.
+    // Claude Code stores subagent files at: <project>/<parent-session-id>/subagents/<agent-id>.jsonl
+    // The `sessionId` field inside the file equals the PARENT session's UUID — not the subagent's
+    // own ID — so every subagent turn would overwrite the parent session record without this fix.
+    // We derive a unique session ID and record the parent link.
+    let subagent_ctx: Option<(String, String)> = (|| {
+        let parent_dir = file_path.parent()?;
+        if parent_dir.file_name()?.to_str()? != "subagents" {
+            return None;
+        }
+        let session_dir = parent_dir.parent()?;
+        let parent_id = session_dir.file_name()?.to_str()?.to_string();
+        let agent_id = file_path.file_stem()?.to_str()?.to_string();
+        Some((parent_id, agent_id))
+    })();
 
     let mut line = String::new();
     loop {
@@ -127,7 +145,12 @@ pub fn parse_file_incremental(
                     }
                     let usage = usage.unwrap();
 
-                    let session_id = entry.session_id.clone().unwrap_or_default();
+                    // For subagent files the JSONL `sessionId` is the parent's ID; use the
+                    // derived unique ID instead so the subagent gets its own DB record.
+                    let session_id = match &subagent_ctx {
+                        Some((parent_id, agent_id)) => format!("{}-{}", parent_id, agent_id),
+                        None => entry.session_id.clone().unwrap_or_default(),
+                    };
                     let msg_id = msg
                         .get("id")
                         .and_then(Value::as_str)
@@ -193,13 +216,17 @@ pub fn parse_file_incremental(
                             project: cwd,
                             project_name,
                             slug: entry.slug.clone().unwrap_or_default(),
+                            provider: "claude-code".to_string(),
+                            provider_version: entry.version.clone().unwrap_or_default(),
                             model: model.clone(),
                             git_branch: entry.git_branch.clone().unwrap_or_default(),
                             started_at: ts_ms,
                             last_turn_at: ts_ms,
                             total_turns: 0,
-                            is_subagent: entry.agent_id.is_some(),
-                            parent_session_id: None,
+                            is_subagent: subagent_ctx.is_some(),
+                            parent_session_id: subagent_ctx
+                                .as_ref()
+                                .map(|(parent_id, _)| parent_id.clone()),
                             context_window_tokens,
                         });
                     }
@@ -209,6 +236,9 @@ pub fn parse_file_incremental(
                         }
                         if model != s.model && !model.is_empty() {
                             s.model = model.clone();
+                        }
+                        if s.provider_version.is_empty() {
+                            s.provider_version = entry.version.clone().unwrap_or_default();
                         }
                         s.total_turns = turn_index + 1;
                         // §8.2: Update context_window_tokens if we find it later in the file.
@@ -250,6 +280,7 @@ pub fn parse_file_incremental(
                             existing.model = model;
                         }
                         tool_calls.extend(analysis.tool_calls);
+                        interaction_events.extend(analysis.interaction_events);
                     } else {
                         let turn = Turn {
                             id: turn_id.clone(),
@@ -281,6 +312,7 @@ pub fn parse_file_incremental(
                         turn_index += 1;
                         turns.push(turn);
                         tool_calls.extend(analysis.tool_calls);
+                        interaction_events.extend(analysis.interaction_events);
                     }
                 }
             },
@@ -296,6 +328,7 @@ pub fn parse_file_incremental(
         session,
         turns,
         tool_calls,
+        interaction_events,
         new_offset: current_offset,
     })
 }
@@ -314,6 +347,7 @@ fn analyze_content(
             mcp_input_token_est: 0,
             text_output_tokens: 0,
             tool_calls: vec![],
+            interaction_events: vec![],
         };
     };
 
@@ -322,6 +356,7 @@ fn analyze_content(
     let mut mcp_call_count: i64 = 0;
     let mut mcp_input_chars: i64 = 0;
     let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut interaction_events: Vec<InteractionEvent> = Vec::new();
 
     for block in blocks {
         match block.get("type").and_then(Value::as_str) {
@@ -369,14 +404,52 @@ fn analyze_content(
                     id: if tool_id.is_empty() {
                         format!("{}-tool-{}", turn_id, mcp_call_count)
                     } else {
-                        tool_id
+                        tool_id.clone()
                     },
                     turn_id: turn_id.to_string(),
                     session_id: session_id.to_string(),
-                    tool_name,
+                    tool_name: tool_name.clone(),
                     input_size_chars: input_chars,
                     input_hash,
                     timestamp,
+                });
+                let (kind, mcp_server, mcp_tool, name) = normalize_tool_name(&tool_name);
+                interaction_events.push(InteractionEvent {
+                    id: if tool_id.is_empty() {
+                        format!("{}-interaction-{}", turn_id, interaction_events.len())
+                    } else {
+                        format!("{tool_id}-interaction")
+                    },
+                    session_id: session_id.to_string(),
+                    turn_id: Some(turn_id.to_string()),
+                    task_run_id: None,
+                    correlation_id: non_empty(tool_id),
+                    parent_id: None,
+                    provider: "claude-code".to_string(),
+                    timestamp,
+                    kind,
+                    phase: "single".to_string(),
+                    name,
+                    display_name: None,
+                    mcp_server,
+                    mcp_tool,
+                    hook_type: None,
+                    agent_type: None,
+                    execution_mode: None,
+                    model: None,
+                    status: Some("observed".to_string()),
+                    success: None,
+                    input_size_chars: input_chars,
+                    output_size_chars: 0,
+                    prompt_size_chars: 0,
+                    summary_size_chars: 0,
+                    total_tokens: None,
+                    total_tool_calls: None,
+                    duration_ms: None,
+                    estimated_input_tokens: input_chars / 4,
+                    estimated_output_tokens: 0,
+                    estimated_cost_usd: 0.0,
+                    confidence: "estimated".to_string(),
                 });
             },
             _ => {},
@@ -390,7 +463,30 @@ fn analyze_content(
         mcp_input_token_est: mcp_input_chars / 4,
         text_output_tokens: text_chars / 4,
         tool_calls,
+        interaction_events,
     }
+}
+
+fn normalize_tool_name(tool_name: &str) -> (String, Option<String>, Option<String>, String) {
+    if let Some(rest) = tool_name.strip_prefix("mcp__") {
+        let mut parts = rest.splitn(3, "__");
+        let server = parts.next().unwrap_or("").to_string();
+        let tool = parts.next().unwrap_or("").to_string();
+        let name = if !server.is_empty() && !tool.is_empty() {
+            format!("{server}::{tool}")
+        } else {
+            tool_name.to_string()
+        };
+        ("mcp".to_string(), non_empty(server), non_empty(tool), name)
+    } else if tool_name == "task" {
+        ("task".to_string(), None, None, "task".to_string())
+    } else {
+        ("tool".to_string(), None, None, tool_name.to_string())
+    }
+}
+
+fn non_empty(s: String) -> Option<String> {
+    (!s.is_empty()).then_some(s)
 }
 
 fn parse_iso_to_ms(s: &str) -> Option<i64> {

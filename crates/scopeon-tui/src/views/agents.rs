@@ -9,6 +9,7 @@ use ratatui::{
 use scopeon_core::AgentNode;
 
 use crate::app::App;
+use crate::text::{truncate_to_chars, truncate_with_ellipsis};
 use crate::views::components::themed_block;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
@@ -116,7 +117,7 @@ fn render_node<'a>(node: &'a AgentNode, prefix: &str, is_last: bool, lines: &mut
         Color::Cyan
     };
 
-    let short_id = &node.session_id[..node.session_id.len().min(8)];
+    let short_id = truncate_with_ellipsis(&node.session_id, 16);
     let short_model = short_model(&node.model);
 
     lines.push(Line::from(vec![
@@ -170,9 +171,5 @@ fn short_model(model: &str) -> String {
             return format!("{}-{}", parts[0], parts[1]);
         }
     }
-    if model.len() > 12 {
-        model[..12].to_string()
-    } else {
-        model.to_string()
-    }
+    truncate_to_chars(model, 12)
 }

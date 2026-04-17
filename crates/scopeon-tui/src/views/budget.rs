@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::app::App;
+use crate::text::truncate_with_ellipsis;
 use crate::views::components::themed_block;
 use chrono::Datelike;
 
@@ -375,16 +376,21 @@ fn draw_model_breakdown(f: &mut Frame, app: &App, area: Rect) {
     let items = &app.budget.cost_by_model;
     let max = items.iter().map(|(_, c)| *c).fold(0.0_f64, f64::max);
 
+    // Compute name column width dynamically: inner width minus cost (8) + bar (12) + spacing.
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let fixed = 2 + 8 + 2 + 10; // indent + cost + spacing + bar
+    let name_w = inner_w.saturating_sub(fixed).max(10).min(28);
+
     let mut lines: Vec<Line> = vec![];
     for (model, cost) in items.iter().take(area.height as usize - 2) {
         let ratio = if max > 0.0 { cost / max } else { 0.0 };
         let bar_w = 10usize;
         let filled = (ratio * bar_w as f64) as usize;
         let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
-        let short = shorten_model(model);
+        let short = truncate_with_ellipsis(&shorten_model(model), name_w);
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  {:<16}", short),
+                format!("  {:name_w$}", short, name_w = name_w),
                 Style::default().fg(Color::White),
             ),
             Span::styled(
@@ -411,20 +417,20 @@ fn draw_project_breakdown(f: &mut Frame, app: &App, area: Rect) {
     let items = &app.budget.cost_by_project;
     let max = items.iter().map(|(_, c)| *c).fold(0.0_f64, f64::max);
 
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let fixed = 2 + 8 + 2 + 10;
+    let name_w = inner_w.saturating_sub(fixed).max(10).min(32);
+
     let mut lines: Vec<Line> = vec![];
     for (project, cost) in items.iter().take(area.height as usize - 2) {
         let ratio = if max > 0.0 { cost / max } else { 0.0 };
         let bar_w = 10usize;
         let filled = (ratio * bar_w as f64) as usize;
         let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
-        let short: String = if project.len() > 16 {
-            format!("{}…", &project[..15])
-        } else {
-            project.clone()
-        };
+        let short = truncate_with_ellipsis(project, name_w);
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  {:<16}", short),
+                format!("  {:name_w$}", short, name_w = name_w),
                 Style::default().fg(Color::White),
             ),
             Span::styled(
@@ -458,11 +464,7 @@ fn draw_tag_breakdown(f: &mut Frame, app: &App, area: Rect) {
         let filled = (ratio * bar_w as f64) as usize;
         let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
         let label = capitalize_tag(tag);
-        let short: String = if label.len() > 12 {
-            format!("{}…", &label[..11])
-        } else {
-            label.clone()
-        };
+        let short = truncate_with_ellipsis(&label, 12);
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {:<12}", short),
@@ -637,9 +639,5 @@ fn shorten_model(model: &str) -> String {
             return format!("{}-{}", parts[0], parts[1]);
         }
     }
-    if model.len() > 16 {
-        model[..16].to_string()
-    } else {
-        model.to_string()
-    }
+    truncate_with_ellipsis(model, 24)
 }

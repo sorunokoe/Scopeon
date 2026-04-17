@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use crate::app::App;
+use crate::text::{truncate_to_chars, truncate_with_ellipsis};
 use crate::theme::Theme;
 use crate::views::components::{empty_state_lines, kpi_row, themed_block};
 use chrono::Datelike;
@@ -760,11 +761,7 @@ fn draw_today_summary(f: &mut Frame, app: &App, area: Rect) {
             .first()
             .map(|s| s.body.as_str())
             .unwrap_or("Check Insights tab for details");
-        let short = if top_issue.len() > 34 {
-            format!("{}…", &top_issue[..33])
-        } else {
-            top_issue.to_string()
-        };
+        let short = truncate_with_ellipsis(top_issue, 34);
         Line::from(vec![
             Span::styled(
                 "  ⚠ ",
@@ -1198,11 +1195,7 @@ fn shorten_model(model: &str) -> String {
             return format!("claude-{}-{}", parts[0], parts[1]);
         }
     }
-    if model.len() > 22 {
-        model[..22].to_string()
-    } else {
-        model.to_string()
-    }
+    truncate_to_chars(model, 22)
 }
 
 fn trend_arrow(pct: f64) -> (&'static str, Color) {

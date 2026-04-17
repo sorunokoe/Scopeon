@@ -15,8 +15,11 @@
 
 | Capability | Detail |
 |---|---|
-| **MCP integration** | 14 tools callable inside the agent — let it self-monitor and self-optimize |
+| **MCP integration** | 17 tools callable inside the agent — let it self-monitor and self-optimize |
 | **Proactive push alerts** | MCP server sends JSON-RPC notifications when context > 80%, budget > 90%, ≤5 turns left, or compaction detected — without polling |
+| **Compaction advisory** | Pre-crisis alert at 55–79% fill when context is accelerating — fires before the wall, not after |
+| **Ambient status push** | Zero-token heartbeat every 30 s via `notifications/scopeon/status` — agents stay informed without any tool calls |
+| **Adaptive health score** | Session-profile-aware scoring (CacheHeavy / Exploration / ToolHeavy / Balanced) — weights calibrate to your workflow automatically |
 | **Webhook escalation** | HTTP POST to Slack/Discord/custom on any alert type — configurable per event |
 | **Adaptive thresholds** | Your own P10/P90 percentile thresholds computed from 90 days of history — not hard-coded |
 | **Waste analysis** | Severity-weighted signals (Critical/Warning/Info) + actionable suggestions from cross-session intelligence |
@@ -36,6 +39,7 @@
 |---|---|
 | **Shell prompt integration** | `scopeon shell-hook` injects `$SCOPEON_STATUS` into every shell prompt — health score, context fill, daily cost |
 | **Git commit trailer** | `scopeon git-hook install` appends an `AI-Cost:` line to every commit message — visible in `git log` forever |
+| **Team cost ledger** | `scopeon team [--days N]` aggregates `AI-Cost:` trailers by author — Markdown table of spend, commits, tokens, all local |
 | **Interactive onboarding** | `scopeon onboard` auto-detects installed AI tools and configures MCP + shell integration in one wizard |
 | **Health diagnostics** | `scopeon doctor` prints memory usage, DB stats, provider availability, and overhead proof |
 | **Shields.io badges** | `scopeon badge` generates live daily-cost and cache-rate badge URLs for your project README |
@@ -60,6 +64,8 @@
 | **Browser dashboard** | `scopeon serve` → `http://localhost:7771` — live WebSocket charts, zero npm |
 | **CI cost gate** | `scopeon ci report --fail-on-cost-delta 50` — fail PRs when AI cost spikes |
 | **Privacy-filtered HTTP API** | Four tiers: health-only to full metrics |
+| **IDE SSE stream** | `GET /sse/v1/status` — persistent Server-Sent Events feed for IDE extensions; compact JSON every ~2 s, zero DB queries |
+| **Git team cost ledger** | `scopeon team` — per-author AI spend from `git log` trailers; no server needed |
 | **Export** | JSON, CSV, or OTLP JSON for external analysis and data pipelines |
 | **OpenTelemetry export** | Prometheus bridge (zero code), OTLP/HTTP push, or `scopeon export --format otlp-json` — feeds Grafana, Datadog, Honeycomb, any OTel backend. [→ guide](opentelemetry.md) |
 | **Reprice** | Recalculate all historical costs after a provider price change in seconds |

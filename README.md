@@ -39,7 +39,8 @@
 | "Which project costs the most?" | Per-project / per-branch cost breakdown |
 | "Did my optimization actually help?" | `compare_sessions` before/after diff |
 | "Can I gate AI cost in CI?" | `scopeon ci report --fail-on-cost-delta 50` |
-| "How is my whole team using AI?" | `scopeon serve` — privacy-filtered team API |
+| "How is my whole team using AI?" | `scopeon team` — per-author cost from git history, no server needed |
+| "Can teammates see my live metrics?" | `scopeon serve` — privacy-filtered API + SSE stream for IDEs |
 | "Can I see AI cost in Grafana / Datadog?" | Prometheus bridge or OTLP push — [docs/opentelemetry.md](docs/opentelemetry.md) |
 
 ---
@@ -54,13 +55,19 @@
 
 ⏳ **"You have ~12 turns left"** — Scopeon tracks context fill rate over time and tells you how many turns remain before the wall. Stop being blindsided mid-task.
 
+🔔 **Context advisory before the crisis** — compaction advisory fires at 55–79% fill when context is accelerating, so you compact at the optimal moment — not after it's too late.
+
+📡 **Zero-token ambient awareness** — every 30 s the MCP server pushes a free status heartbeat to the agent. No polling, no token spend, just continuous situational awareness.
+
 🧭 **See what the agent actually did** — provenance-aware history shows which skills, MCPs, hooks, tasks, and subagents were involved, with exact vs. estimated support called out per provider.
 
 🤖 **Your AI agent monitors itself** — 17 MCP tools let Claude Code query its own token stats, provenance history, trigger alerts, and compare sessions — without you doing anything.
 
 🚦 **Fail PRs on AI cost spikes** — one command in CI, zero config. `scopeon ci report --fail-on-cost-delta 50` catches runaway cost before it merges.
 
-🌐 **Live browser dashboard** — `scopeon serve` → WebSocket-powered charts at `localhost:7771`. No npm, no Node, just Rust.
+🌐 **Live browser dashboard + IDE stream** — `scopeon serve` → WebSocket-powered charts at `localhost:7771` and a `GET /sse/v1/status` SSE feed for IDE extensions. No npm, no Node, just Rust.
+
+👥 **Team cost from git history** — `scopeon team` reads `AI-Cost:` trailers from `git log` and prints a per-author cost table. No server, no cloud, works from any machine.
 
 🐚 **Cost follows you everywhere** — in your shell prompt, in every `git commit` as an `AI-Cost:` trailer, in Slack via digest webhooks.
 

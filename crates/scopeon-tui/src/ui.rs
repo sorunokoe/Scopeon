@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::app::{App, Tab};
 use crate::logo::{logo_badge, logo_lines};
+use crate::text::{truncate_to_chars, truncate_with_ellipsis};
 use crate::theme::Theme;
 use crate::views::components::{micro_sparkline, spinner_char};
 use crate::views::{agents, budget, dashboard, insights, providers, sessions};
@@ -598,11 +599,7 @@ fn draw_tab_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
         let hints_and_crumb = if breadcrumb.is_empty() {
             "  ?:help  q:quit  ".to_string()
         } else {
-            let crumb_short = if breadcrumb.len() > 28 {
-                format!("{}…", &breadcrumb[..27])
-            } else {
-                breadcrumb
-            };
+            let crumb_short = truncate_with_ellipsis(&breadcrumb, 50);
             format!("  {}  │  ?:help  q:quit  ", crumb_short)
         };
 
@@ -1037,18 +1034,10 @@ fn shorten_model(model: &str) -> String {
         let parts: Vec<&str> = s.split('-').collect();
         if parts.len() >= 2 {
             let name = format!("{}-{}", parts[0], parts[1]);
-            return if name.len() > 14 {
-                name[..14].to_string()
-            } else {
-                name
-            };
+            return truncate_to_chars(&name, 14);
         }
     }
-    if model.len() > 14 {
-        model[..14].to_string()
-    } else {
-        model.to_string()
-    }
+    truncate_to_chars(model, 14)
 }
 
 /// IS-15: Read current process RSS memory in MB on macOS and Linux.

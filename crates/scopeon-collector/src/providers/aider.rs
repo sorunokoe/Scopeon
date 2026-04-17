@@ -151,6 +151,8 @@ impl Provider for AiderProvider {
                     .to_string(),
                 project_name: "aider".to_string(),
                 slug: format!("aider-{}", first.0),
+                provider: "aider".to_string(),
+                provider_version: String::new(),
                 model: model.clone(),
                 git_branch: String::new(),
                 started_at: first.0 * 1000,

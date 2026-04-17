@@ -65,35 +65,52 @@ the current refresh cycle. The file watcher writes; everything else reads.
 
 ## SQLite schema
 
-Four tables, seven migrations (additive only — ALTER TABLE ADD COLUMN or CREATE TABLE,
-never destructive). Migrations run at startup via `rusqlite_migration`.
+Six tables, eight migrations (additive only — `ALTER TABLE ADD COLUMN`, `CREATE TABLE`,
+or `CREATE INDEX`; never destructive). Migrations run at startup via `rusqlite_migration`.
 
 ```
 sessions
   id                    TEXT PK   - opaque session ID from the agent
-  provider              TEXT      - "claude-code", "copilot", "aider", ...
+  project               TEXT
+  project_name          TEXT
+  slug                  TEXT
   model                 TEXT      - model string as reported by the agent
   git_branch            TEXT      - git branch at session start (if detectable)
   started_at            INTEGER   - Unix timestamp
-  last_active_at        INTEGER
-  total_input_tokens    INTEGER
-  total_cache_read      INTEGER
-  total_cache_write     INTEGER
-  total_output_tokens   INTEGER
-  total_cost_usd        REAL
-  context_window_tokens INTEGER   - per-session window size from JSONL maxTokens
+  last_turn_at          INTEGER
+  total_turns           INTEGER
+  is_subagent           INTEGER
+  parent_session_id     TEXT NULL
+  context_window_tokens INTEGER NULL - per-session window size from log/API metadata
 
 turns
-  id                    INTEGER PK autoincrement
+  id                    TEXT PK
   session_id            TEXT FK -> sessions.id
   turn_index            INTEGER
+  timestamp             INTEGER
+  duration_ms           INTEGER NULL
   input_tokens          INTEGER
   cache_read_tokens     INTEGER
   cache_write_tokens    INTEGER
+  cache_write_5m_tokens INTEGER
+  cache_write_1h_tokens INTEGER
   thinking_tokens       INTEGER
   output_tokens         INTEGER
   mcp_call_count        INTEGER
-  cost_usd              REAL
+  mcp_input_token_est   INTEGER
+  text_output_tokens    INTEGER
+  model                 TEXT
+  service_tier          TEXT
+  estimated_cost_usd    REAL
+  is_compaction_event   INTEGER
+
+tool_calls
+  id                    TEXT PK
+  turn_id               TEXT FK -> turns.id
+  session_id            TEXT FK -> sessions.id
+  tool_name             TEXT
+  input_size_chars      INTEGER
+  input_hash            INTEGER
   timestamp             INTEGER
 
 session_tags
@@ -102,11 +119,21 @@ session_tags
 
 daily_rollup
   date                  TEXT PK   - "YYYY-MM-DD"
-  total_cost_usd        REAL
-  total_tokens          INTEGER
+  total_input_tokens    INTEGER
+  total_cache_read_tokens INTEGER
+  total_cache_write_tokens INTEGER
+  total_output_tokens   INTEGER
+  total_thinking_tokens INTEGER
+  total_mcp_calls       INTEGER
   session_count         INTEGER
-  cache_savings_usd     REAL
-  health_score_avg      REAL
+  turn_count            INTEGER
+  estimated_cost_usd    REAL
+  health_score_avg      REAL      - optional historical rollup; not written by the UI
+
+file_offsets
+  file_path             TEXT PK
+  byte_offset           INTEGER
+  last_modified         INTEGER
 ```
 
 ---
@@ -115,8 +142,9 @@ daily_rollup
 
 **`db.rs`** is the heart. All SQL lives here.
 
-- `Database` wraps a `Mutex<Connection>` (write) plus up to 4 read-only connections.
-  Read-heavy paths (HTTP API, WS snapshot) use the read pool.
+- `Database` owns a single `rusqlite::Connection`.
+  Read-heavy paths that need concurrency (for example the MCP snapshot task) may open
+  separate read-only `Database` handles against the same WAL-backed file.
 - `with_db()` in `serve.rs` wraps DB operations in `tokio::task::spawn_blocking` so
   SQLite never blocks the Tokio executor.
 - Migrations are a `&[&str]` constant at the top of the file. Add new ones at the end.
@@ -144,20 +172,19 @@ Every AI agent source implements the `Provider` trait:
 
 ```rust
 pub trait Provider: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn description(&self) -> &'static str;
+    fn id(&self) -> &str;
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn is_available(&self) -> bool;
     fn watch_paths(&self) -> Vec<PathBuf>;
-    fn parse_file_incremental(
-        &self,
-        path: &Path,
-        from_byte: u64,
-    ) -> Result<Vec<IncrementalResult>>;
+    fn scan(&self, db: &Database) -> Result<usize>;
 }
 ```
 
-`parse_file_incremental` receives the byte offset of the last read — it only parses
-bytes written since the last call. This is how near-zero CPU overhead is achieved on
-idle: only new bytes are processed.
+Most file-backed providers delegate per-file incremental parsing to
+`watcher::process_file()`, which consults `file_offsets` and then calls
+`parser::parse_file_incremental()` only for unread bytes. Providers with non-Claude
+formats (for example Copilot CLI, Aider, Gemini CLI) implement their own `scan()` logic.
 
 Providers live in `crates/scopeon-collector/src/providers/`. To add a new provider:
 1. Create `providers/myprovider.rs` implementing `Provider`.
@@ -169,8 +196,9 @@ Providers live in `crates/scopeon-collector/src/providers/`. To add a new provid
 `watcher.rs` uses the `notify` crate (FSEvents on macOS, inotify on Linux). On each
 file event:
 1. Read new bytes from the stored byte offset.
-2. Call `provider.parse_file_incremental()`.
-3. Upsert the resulting `Session` + `Turn`s into SQLite.
+2. Call `provider.scan()` for the affected provider.
+3. File-backed providers call `watcher::process_file()` per changed file, which parses
+   unread bytes and upserts `Session`, `Turn`, and `ToolCall` rows.
 4. Run tool-call pattern inference and auto-tag if no manual tag exists.
 5. Advance the stored byte offset.
 
@@ -267,7 +295,7 @@ turns remain, or a compaction event is detected.
 | `shell_hook.rs` | `scopeon shell-hook / shell-status` |
 | `git_hook.rs` | `scopeon git-hook` |
 | `badge.rs` | `scopeon badge` |
-| `onboarding.rs` | `scopeon init` |
+| `onboarding.rs` | first-run wizard, `scopeon onboard` |
 | `doctor.rs` | `scopeon doctor` |
 | `dashboard.html` | Embedded browser dashboard (served by `serve.rs`) |
 

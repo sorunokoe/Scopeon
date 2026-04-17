@@ -16,6 +16,7 @@ use ratatui::{
 use scopeon_core::{branch_to_tag, shadow_cost, Session, SessionStats};
 
 use crate::app::{App, PaneFocus};
+use crate::text::{truncate_to_chars, truncate_with_ellipsis};
 use crate::views::components::{empty_state_lines, themed_block};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
@@ -126,11 +127,7 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
                 .map(|t| format!(" [{}]", t))
                 .unwrap_or_default();
             let project_branch = format!("{}{}", project_branch, tag_suffix);
-            let pb_short = if project_branch.len() > 22 {
-                format!("{}…", &project_branch[..21])
-            } else {
-                project_branch.clone()
-            };
+            let pb_short = truncate_with_ellipsis(&project_branch, 20);
 
             Row::new(vec![
                 Cell::from(format!("{}\n{}", date, pb_short)).style(base_style),
@@ -193,7 +190,7 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
         rows,
         [
             Constraint::Length(20),
-            Constraint::Length(10),
+            Constraint::Length(14),
             Constraint::Length(7),
             Constraint::Min(5),
         ],
@@ -246,7 +243,7 @@ fn draw_session_detail(f: &mut Frame, app: &App, area: Rect) {
 
     let v = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(0)])
+        .constraints([Constraint::Length(11), Constraint::Min(0)])
         .split(area);
 
     draw_detail_header(f, app, stats, border_style, v[0]);
@@ -264,6 +261,39 @@ fn draw_detail_header(
     let model = session.map(|s| s.model.as_str()).unwrap_or("—");
     let project = session.map(|s| s.project_name.as_str()).unwrap_or("—");
     let branch = session.map(|s| s.git_branch.as_str()).unwrap_or("—");
+    let provider = session
+        .map(|s| s.provider.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("—");
+    let provider_version = session
+        .map(|s| s.provider_version.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("—");
+    let interaction_count = app.selected_session_interaction_events.len();
+    let task_count = app.selected_session_task_runs.len();
+    let skill_count = app
+        .selected_session_interaction_events
+        .iter()
+        .filter(|event| event.kind == "skill")
+        .count();
+    let hook_count = app
+        .selected_session_interaction_events
+        .iter()
+        .filter(|event| event.kind == "hook")
+        .count();
+    let recent_tasks = app
+        .selected_session_task_runs
+        .iter()
+        .rev()
+        .take(2)
+        .map(|task| {
+            task.display_name
+                .as_deref()
+                .unwrap_or(&task.name)
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let cache_pct = stats.cache_hit_rate * 100.0;
     let cache_bar = fill_bar(stats.cache_hit_rate, 16);
@@ -317,6 +347,18 @@ fn draw_detail_header(
             ),
         ]),
         Line::from(vec![
+            Span::styled("  Provider: ", Style::default().fg(app.theme.muted_color())),
+            Span::styled(
+                provider.to_string(),
+                Style::default().fg(app.theme.text_primary()),
+            ),
+            Span::styled("  Version: ", Style::default().fg(app.theme.muted_color())),
+            Span::styled(
+                provider_version.to_string(),
+                Style::default().fg(app.theme.accent_color()),
+            ),
+        ]),
+        Line::from(vec![
             Span::styled("  Turns:  ", Style::default().fg(app.theme.muted_color())),
             Span::styled(
                 stats.total_turns.to_string(),
@@ -363,6 +405,45 @@ fn draw_detail_header(
             Span::styled(
                 fmt_k(stats.total_output_tokens),
                 Style::default().fg(app.theme.accent_color()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  Provenance: ",
+                Style::default().fg(app.theme.muted_color()),
+            ),
+            Span::styled(
+                format!("{} interactions", interaction_count),
+                Style::default().fg(app.theme.text_primary()),
+            ),
+            Span::styled("  Tasks: ", Style::default().fg(app.theme.muted_color())),
+            Span::styled(
+                task_count.to_string(),
+                Style::default().fg(app.theme.warning_color()),
+            ),
+            Span::styled("  Skills: ", Style::default().fg(app.theme.muted_color())),
+            Span::styled(
+                skill_count.to_string(),
+                Style::default().fg(app.theme.success_color()),
+            ),
+            Span::styled("  Hooks: ", Style::default().fg(app.theme.muted_color())),
+            Span::styled(
+                hook_count.to_string(),
+                Style::default().fg(app.theme.cost_color()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  Recent tasks: ",
+                Style::default().fg(app.theme.muted_color()),
+            ),
+            Span::styled(
+                if recent_tasks.is_empty() {
+                    "—".to_string()
+                } else {
+                    recent_tasks
+                },
+                Style::default().fg(app.theme.text_primary()),
             ),
         ]),
         Line::from(vec![Span::styled(
@@ -497,9 +578,9 @@ fn draw_session_detail_fullscreen(f: &mut Frame, app: &App, area: Rect) {
 
     // IS-2: When replay mode is active, show a 3-row snapshot panel above the turn table.
     let (header_h, replay_h) = if app.replay_turn_idx.is_some() {
-        (7, 3)
+        (11, 3)
     } else {
-        (7, 0)
+        (11, 0)
     };
 
     let v = Layout::default()
@@ -735,21 +816,13 @@ fn shorten_model(model: &str) -> String {
         let parts: Vec<&str> = s.split('-').collect();
         if parts.len() >= 2 {
             let name = format!("{}-{}", parts[0], parts[1]);
-            return if name.len() > 12 {
-                name[..12].to_string()
-            } else {
-                name
-            };
+            return truncate_to_chars(&name, 14);
         }
     }
     if model.starts_with("gpt-") {
-        return model.to_string();
+        return truncate_with_ellipsis(model, 14);
     }
-    if model.len() > 12 {
-        model[..12].to_string()
-    } else {
-        model.to_string()
-    }
+    truncate_with_ellipsis(model, 14)
 }
 
 fn fill_bar(ratio: f64, width: usize) -> String {

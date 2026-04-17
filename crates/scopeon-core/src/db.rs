@@ -105,6 +105,73 @@ static MIGRATIONS: &[&str] = &[
     // M0007 — §8.2: Store actual context window size from API response per-session.
     // NULL means unknown — callers fall back to model-prefix table in context.rs.
     "ALTER TABLE sessions ADD COLUMN context_window_tokens INTEGER;",
+    // M0008 — hot-path composite index for last-turn and recent-turn lookups.
+    "CREATE INDEX IF NOT EXISTS idx_turns_session_turn_index ON turns(session_id, turn_index DESC);",
+    // M0009 — provider metadata plus normalized provenance/task history tables.
+    "ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT '';
+     ALTER TABLE sessions ADD COLUMN provider_version TEXT NOT NULL DEFAULT '';
+     CREATE TABLE IF NOT EXISTS interaction_events (
+         id TEXT PRIMARY KEY,
+         session_id TEXT NOT NULL,
+         turn_id TEXT,
+         task_run_id TEXT,
+         correlation_id TEXT,
+         parent_id TEXT,
+         provider TEXT NOT NULL DEFAULT '',
+         timestamp INTEGER NOT NULL,
+         kind TEXT NOT NULL DEFAULT '',
+         phase TEXT NOT NULL DEFAULT '',
+         name TEXT NOT NULL DEFAULT '',
+         display_name TEXT,
+         mcp_server TEXT,
+         mcp_tool TEXT,
+         hook_type TEXT,
+         agent_type TEXT,
+         execution_mode TEXT,
+         model TEXT,
+         status TEXT,
+         success INTEGER,
+         input_size_chars INTEGER NOT NULL DEFAULT 0,
+         output_size_chars INTEGER NOT NULL DEFAULT 0,
+         prompt_size_chars INTEGER NOT NULL DEFAULT 0,
+         summary_size_chars INTEGER NOT NULL DEFAULT 0,
+         total_tokens INTEGER,
+         total_tool_calls INTEGER,
+         duration_ms INTEGER,
+         estimated_input_tokens INTEGER NOT NULL DEFAULT 0,
+         estimated_output_tokens INTEGER NOT NULL DEFAULT 0,
+         estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
+         confidence TEXT NOT NULL DEFAULT 'unavailable',
+         FOREIGN KEY (session_id) REFERENCES sessions(id)
+     );
+     CREATE INDEX IF NOT EXISTS idx_interaction_events_session_time
+         ON interaction_events(session_id, timestamp ASC);
+     CREATE INDEX IF NOT EXISTS idx_interaction_events_kind_time
+         ON interaction_events(kind, timestamp DESC);
+     CREATE TABLE IF NOT EXISTS task_runs (
+         id TEXT PRIMARY KEY,
+         session_id TEXT NOT NULL,
+         correlation_id TEXT,
+         name TEXT NOT NULL DEFAULT '',
+         display_name TEXT,
+         agent_type TEXT NOT NULL DEFAULT '',
+         execution_mode TEXT NOT NULL DEFAULT '',
+         requested_model TEXT,
+         actual_model TEXT,
+         started_at INTEGER NOT NULL,
+         completed_at INTEGER,
+         duration_ms INTEGER,
+         success INTEGER,
+         total_tokens INTEGER,
+         total_tool_calls INTEGER,
+         description_size_chars INTEGER NOT NULL DEFAULT 0,
+         prompt_size_chars INTEGER NOT NULL DEFAULT 0,
+         summary_size_chars INTEGER NOT NULL DEFAULT 0,
+         confidence TEXT NOT NULL DEFAULT 'unavailable',
+         FOREIGN KEY (session_id) REFERENCES sessions(id)
+     );
+     CREATE INDEX IF NOT EXISTS idx_task_runs_session_time
+         ON task_runs(session_id, started_at DESC);",
 ];
 
 /// Handle to the Scopeon SQLite database.
@@ -241,9 +308,11 @@ impl Database {
     pub fn upsert_session(&self, session: &Session) -> Result<()> {
         self.conn.execute(
             "INSERT INTO sessions
-                (id, project, project_name, slug, model, git_branch, started_at, last_turn_at, total_turns, is_subagent, parent_session_id, context_window_tokens)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                (id, project, project_name, slug, provider, provider_version, model, git_branch, started_at, last_turn_at, total_turns, is_subagent, parent_session_id, context_window_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(id) DO UPDATE SET
+                provider = COALESCE(NULLIF(excluded.provider, ''), sessions.provider),
+                provider_version = COALESCE(NULLIF(excluded.provider_version, ''), sessions.provider_version),
                 model = excluded.model,
                 last_turn_at = excluded.last_turn_at,
                 total_turns = excluded.total_turns,
@@ -256,6 +325,8 @@ impl Database {
                 session.project,
                 session.project_name,
                 session.slug,
+                session.provider,
+                session.provider_version,
                 session.model,
                 session.git_branch,
                 session.started_at,
@@ -336,9 +407,9 @@ impl Database {
 
     pub fn get_session(&self, session_id: &str) -> Result<Option<Session>> {
         let result = self.conn.query_row(
-            "SELECT id, project, project_name, slug, model, git_branch,
-                    started_at, last_turn_at, total_turns, is_subagent, parent_session_id,
-                    context_window_tokens
+            "SELECT id, project, project_name, slug, provider, provider_version, model,
+                    git_branch, started_at, last_turn_at, total_turns, is_subagent,
+                    parent_session_id, context_window_tokens
              FROM sessions WHERE id = ?1",
             params![session_id],
             row_to_session,
@@ -352,9 +423,9 @@ impl Database {
 
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project, project_name, slug, model, git_branch,
-                    started_at, last_turn_at, total_turns, is_subagent, parent_session_id,
-                    context_window_tokens
+            "SELECT id, project, project_name, slug, provider, provider_version, model,
+                    git_branch, started_at, last_turn_at, total_turns, is_subagent,
+                    parent_session_id, context_window_tokens
              FROM sessions
              ORDER BY last_turn_at DESC
              LIMIT ?1",
@@ -584,7 +655,7 @@ impl Database {
     pub fn refresh_daily_rollup(&self) -> Result<()> {
         // Full recompute — used only for reprice and initial backfill.
         // For incremental updates after file events, use refresh_daily_rollup_for_timestamps.
-        // health_score_avg defaults to 0.0; it is updated separately by the TUI on each refresh.
+        // health_score_avg defaults to 0.0; read paths must not mutate it.
         self.conn.execute_batch(
             "BEGIN;
              DELETE FROM daily_rollup;
@@ -623,76 +694,49 @@ impl Database {
                  WHERE timestamp IN (SELECT value FROM json_each(?))",
             )?;
             // Build a JSON array of timestamp values for the IN clause.
-            let json_arr = serde_json::to_string(timestamps_ms).unwrap_or_default();
+            let json_arr = serde_json::to_string(timestamps_ms)?;
             let rows = stmt.query_map([json_arr], |r| r.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        // Upsert each affected date only.
-        let mut stmt = self.conn.prepare(
-            "INSERT OR REPLACE INTO daily_rollup
-             SELECT
-                date(timestamp / 1000, 'unixepoch', 'localtime') AS date,
-                SUM(input_tokens),
-                SUM(cache_read_tokens),
-                SUM(cache_write_tokens),
-                SUM(output_tokens),
-                SUM(thinking_tokens),
-                SUM(mcp_call_count),
-                COUNT(DISTINCT session_id),
-                COUNT(*),
-                SUM(estimated_cost_usd),
-                COALESCE(
-                    (SELECT health_score_avg FROM daily_rollup WHERE date = date(turns.timestamp / 1000, 'unixepoch', 'localtime')),
-                    0.0
-                )
-             FROM turns
-             WHERE date(timestamp / 1000, 'unixepoch', 'localtime') = ?
-             GROUP BY date",
-        )?;
         // §1.4: Wrap all per-date upserts in a single explicit transaction to avoid
         // one implicit fsync per date (common on first backfill with many dates).
         let tx = self.conn.unchecked_transaction()?;
-        for date in &dates {
-            stmt.execute([date])?;
+        {
+            // Upsert each affected date only.
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO daily_rollup
+                 SELECT
+                    date(timestamp / 1000, 'unixepoch', 'localtime') AS date,
+                    SUM(input_tokens),
+                    SUM(cache_read_tokens),
+                    SUM(cache_write_tokens),
+                    SUM(output_tokens),
+                    SUM(thinking_tokens),
+                    SUM(mcp_call_count),
+                    COUNT(DISTINCT session_id),
+                    COUNT(*),
+                    SUM(estimated_cost_usd),
+                    COALESCE(
+                        (SELECT health_score_avg FROM daily_rollup WHERE date = date(turns.timestamp / 1000, 'unixepoch', 'localtime')),
+                        0.0
+                    )
+                 FROM turns
+                 WHERE date(timestamp / 1000, 'unixepoch', 'localtime') = ?
+                 GROUP BY date",
+            )?;
+            for date in &dates {
+                stmt.execute([date])?;
+            }
         }
         tx.commit()?;
         Ok(())
     }
 
-    /// Update today's health score in the daily rollup.
-    ///
-    /// TRIZ D6: Persists the computed health score so it can be queried as a
-    /// time series — enables the health trend sparkline and future ML forecasting.
-    /// Uses a running average: if a score already exists for today, blends it.
-    pub fn update_today_health_score(&self, score: f64) -> Result<()> {
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        // §7.2: Both statements must be atomic. Wrap in a transaction so a crash
-        // between INSERT and UPDATE cannot leave an un-initialized row.
-        // 70/30 EMA: gives history (0.7 weight) reasonable inertia, new reading (0.3)
-        // updates the score without letting transient spikes dominate.
-        let tx = self.conn.unchecked_transaction()?;
-        self.conn.execute(
-            "INSERT OR IGNORE INTO daily_rollup (date) VALUES (?1)",
-            params![today],
-        )?;
-        self.conn.execute(
-            "UPDATE daily_rollup
-             SET health_score_avg = CASE
-                 WHEN health_score_avg = 0.0 THEN ?1
-                 ELSE (health_score_avg * 0.7 + ?1 * 0.3)   -- 70/30 EMA: history outweighs new reading
-             END
-             WHERE date = ?2",
-            params![score, today],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// IS-M: Get cache efficiency (cache_read / (cache_read + input)) for the last N turns
+    /// IS-M: Get cache efficiency (cache_read / (input + cache_read + cache_write)) for the last N turns
     /// of a session, ordered oldest-first. Used to detect cache bust events.
     pub fn get_cache_efficiency_trend(&self, session_id: &str, last_n: usize) -> Result<Vec<f64>> {
         let mut stmt = self.conn.prepare(
-            "SELECT input_tokens, cache_read_tokens
+            "SELECT input_tokens, cache_read_tokens, cache_write_tokens
              FROM turns
              WHERE session_id = ?1
              ORDER BY turn_index DESC
@@ -701,12 +745,13 @@ impl Database {
         let rows = stmt.query_map(params![session_id, last_n as i64], |row| {
             let input: i64 = row.get(0)?;
             let cache_read: i64 = row.get(1)?;
-            Ok((input, cache_read))
+            let cache_write: i64 = row.get(2)?;
+            Ok((input, cache_read, cache_write))
         })?;
         let mut efficiencies: Vec<f64> = rows
             .filter_map(|r| r.ok())
-            .map(|(input, cache_read)| {
-                let denom = input + cache_read;
+            .map(|(input, cache_read, cache_write)| {
+                let denom = input + cache_read + cache_write;
                 if denom > 0 {
                     cache_read as f64 / denom as f64
                 } else {
@@ -771,16 +816,29 @@ impl Database {
         // and DELETE turns leaves orphaned tool_calls rows. Wrap in an explicit transaction.
         let tx = self.conn.unchecked_transaction()?;
         // Delete tool_calls first to satisfy the FK constraint (no CASCADE defined).
-        self.conn.execute(
+        tx.execute(
             "DELETE FROM tool_calls WHERE turn_id IN \
              (SELECT id FROM turns WHERE timestamp < ?1)",
             params![cutoff_ms],
         )?;
-        let deleted = self
-            .conn
-            .execute("DELETE FROM turns WHERE timestamp < ?1", params![cutoff_ms])?;
+        let deleted = tx.execute("DELETE FROM turns WHERE timestamp < ?1", params![cutoff_ms])?;
+        tx.execute(
+            "DELETE FROM interaction_events
+             WHERE session_id NOT IN (SELECT DISTINCT session_id FROM turns)",
+            [],
+        )?;
+        tx.execute(
+            "DELETE FROM task_runs
+             WHERE session_id NOT IN (SELECT DISTINCT session_id FROM turns)",
+            [],
+        )?;
+        tx.execute(
+            "DELETE FROM session_tags
+             WHERE session_id NOT IN (SELECT DISTINCT session_id FROM turns)",
+            [],
+        )?;
         // Remove sessions that have no remaining turns.
-        self.conn.execute(
+        tx.execute(
             "DELETE FROM sessions WHERE id NOT IN (SELECT DISTINCT session_id FROM turns)",
             [],
         )?;
@@ -989,6 +1047,271 @@ impl Database {
                 timestamp: row.get(6)?,
             })
         })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert_interaction_event(&self, event: &InteractionEvent) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO interaction_events (
+                id, session_id, turn_id, task_run_id, correlation_id, parent_id, provider,
+                timestamp, kind, phase, name, display_name, mcp_server, mcp_tool, hook_type,
+                agent_type, execution_mode, model, status, success, input_size_chars,
+                output_size_chars, prompt_size_chars, summary_size_chars, total_tokens,
+                total_tool_calls, duration_ms, estimated_input_tokens, estimated_output_tokens,
+                estimated_cost_usd, confidence
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
+             )
+             ON CONFLICT(id) DO UPDATE SET
+                turn_id = COALESCE(excluded.turn_id, interaction_events.turn_id),
+                task_run_id = COALESCE(excluded.task_run_id, interaction_events.task_run_id),
+                correlation_id = COALESCE(excluded.correlation_id, interaction_events.correlation_id),
+                parent_id = COALESCE(excluded.parent_id, interaction_events.parent_id),
+                provider = COALESCE(NULLIF(excluded.provider, ''), interaction_events.provider),
+                timestamp = excluded.timestamp,
+                kind = excluded.kind,
+                phase = excluded.phase,
+                name = excluded.name,
+                display_name = COALESCE(excluded.display_name, interaction_events.display_name),
+                mcp_server = COALESCE(excluded.mcp_server, interaction_events.mcp_server),
+                mcp_tool = COALESCE(excluded.mcp_tool, interaction_events.mcp_tool),
+                hook_type = COALESCE(excluded.hook_type, interaction_events.hook_type),
+                agent_type = COALESCE(excluded.agent_type, interaction_events.agent_type),
+                execution_mode = COALESCE(excluded.execution_mode, interaction_events.execution_mode),
+                model = COALESCE(excluded.model, interaction_events.model),
+                status = COALESCE(excluded.status, interaction_events.status),
+                success = COALESCE(excluded.success, interaction_events.success),
+                input_size_chars = excluded.input_size_chars,
+                output_size_chars = excluded.output_size_chars,
+                prompt_size_chars = excluded.prompt_size_chars,
+                summary_size_chars = excluded.summary_size_chars,
+                total_tokens = COALESCE(excluded.total_tokens, interaction_events.total_tokens),
+                total_tool_calls = COALESCE(excluded.total_tool_calls, interaction_events.total_tool_calls),
+                duration_ms = COALESCE(excluded.duration_ms, interaction_events.duration_ms),
+                estimated_input_tokens = excluded.estimated_input_tokens,
+                estimated_output_tokens = excluded.estimated_output_tokens,
+                estimated_cost_usd = excluded.estimated_cost_usd,
+                confidence = excluded.confidence",
+            params![
+                event.id,
+                event.session_id,
+                event.turn_id,
+                event.task_run_id,
+                event.correlation_id,
+                event.parent_id,
+                event.provider,
+                event.timestamp,
+                event.kind,
+                event.phase,
+                event.name,
+                event.display_name,
+                event.mcp_server,
+                event.mcp_tool,
+                event.hook_type,
+                event.agent_type,
+                event.execution_mode,
+                event.model,
+                event.status,
+                event.success.map(|v| v as i32),
+                event.input_size_chars,
+                event.output_size_chars,
+                event.prompt_size_chars,
+                event.summary_size_chars,
+                event.total_tokens,
+                event.total_tool_calls,
+                event.duration_ms,
+                event.estimated_input_tokens,
+                event.estimated_output_tokens,
+                event.estimated_cost_usd,
+                event.confidence,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_interaction_events_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InteractionEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, turn_id, task_run_id, correlation_id, parent_id, provider,
+                    timestamp, kind, phase, name, display_name, mcp_server, mcp_tool, hook_type,
+                    agent_type, execution_mode, model, status, success, input_size_chars,
+                    output_size_chars, prompt_size_chars, summary_size_chars, total_tokens,
+                    total_tool_calls, duration_ms, estimated_input_tokens, estimated_output_tokens,
+                    estimated_cost_usd, confidence
+              FROM interaction_events
+              WHERE session_id = ?1
+              ORDER BY timestamp DESC
+              LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit as i64], row_to_interaction_event)?;
+        let mut events = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        events.reverse();
+        Ok(events)
+    }
+
+    pub fn list_recent_interaction_events(&self, limit: usize) -> Result<Vec<InteractionEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, turn_id, task_run_id, correlation_id, parent_id, provider,
+                    timestamp, kind, phase, name, display_name, mcp_server, mcp_tool, hook_type,
+                    agent_type, execution_mode, model, status, success, input_size_chars,
+                    output_size_chars, prompt_size_chars, summary_size_chars, total_tokens,
+                    total_tool_calls, duration_ms, estimated_input_tokens, estimated_output_tokens,
+                    estimated_cost_usd, confidence
+             FROM interaction_events
+             ORDER BY timestamp DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], row_to_interaction_event)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert_task_run(&self, task: &TaskRun) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO task_runs (
+                id, session_id, correlation_id, name, display_name, agent_type, execution_mode,
+                requested_model, actual_model, started_at, completed_at, duration_ms, success,
+                total_tokens, total_tool_calls, description_size_chars, prompt_size_chars,
+                summary_size_chars, confidence
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                ?18, ?19
+             )
+             ON CONFLICT(id) DO UPDATE SET
+                correlation_id = COALESCE(excluded.correlation_id, task_runs.correlation_id),
+                name = excluded.name,
+                display_name = COALESCE(excluded.display_name, task_runs.display_name),
+                agent_type = COALESCE(NULLIF(excluded.agent_type, ''), task_runs.agent_type),
+                execution_mode = COALESCE(NULLIF(excluded.execution_mode, ''), task_runs.execution_mode),
+                requested_model = COALESCE(excluded.requested_model, task_runs.requested_model),
+                actual_model = COALESCE(excluded.actual_model, task_runs.actual_model),
+                started_at = excluded.started_at,
+                completed_at = COALESCE(excluded.completed_at, task_runs.completed_at),
+                duration_ms = COALESCE(excluded.duration_ms, task_runs.duration_ms),
+                success = COALESCE(excluded.success, task_runs.success),
+                total_tokens = COALESCE(excluded.total_tokens, task_runs.total_tokens),
+                total_tool_calls = COALESCE(excluded.total_tool_calls, task_runs.total_tool_calls),
+                description_size_chars = excluded.description_size_chars,
+                prompt_size_chars = excluded.prompt_size_chars,
+                summary_size_chars = excluded.summary_size_chars,
+                confidence = excluded.confidence",
+            params![
+                task.id,
+                task.session_id,
+                task.correlation_id,
+                task.name,
+                task.display_name,
+                task.agent_type,
+                task.execution_mode,
+                task.requested_model,
+                task.actual_model,
+                task.started_at,
+                task.completed_at,
+                task.duration_ms,
+                task.success.map(|v| v as i32),
+                task.total_tokens,
+                task.total_tool_calls,
+                task.description_size_chars,
+                task.prompt_size_chars,
+                task.summary_size_chars,
+                task.confidence,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_task_runs_for_session(&self, session_id: &str) -> Result<Vec<TaskRun>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, correlation_id, name, display_name, agent_type,
+                    execution_mode, requested_model, actual_model, started_at, completed_at,
+                    duration_ms, success, total_tokens, total_tool_calls,
+                    description_size_chars, prompt_size_chars, summary_size_chars, confidence
+             FROM task_runs
+             WHERE session_id = ?1
+             ORDER BY started_at ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], row_to_task_run)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Return the most recent `limit` task runs for a session in chronological order.
+    pub fn list_recent_task_runs_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<TaskRun>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, correlation_id, name, display_name, agent_type,
+                    execution_mode, requested_model, actual_model, started_at, completed_at,
+                    duration_ms, success, total_tokens, total_tool_calls,
+                    description_size_chars, prompt_size_chars, summary_size_chars, confidence
+             FROM task_runs
+             WHERE session_id = ?1
+             ORDER BY started_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit as i64], row_to_task_run)?;
+        let mut tasks = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        tasks.reverse();
+        Ok(tasks)
+    }
+
+    /// Return the most recent `limit` turns for a session in chronological order.
+    pub fn list_recent_turns_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Turn>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, turn_index, timestamp, duration_ms,
+                    input_tokens, cache_read_tokens, cache_write_tokens,
+                    cache_write_5m_tokens, cache_write_1h_tokens, output_tokens,
+                    thinking_tokens, mcp_call_count, mcp_input_token_est, text_output_tokens,
+                    model, service_tier, estimated_cost_usd, is_compaction_event
+             FROM turns
+             WHERE session_id = ?1
+             ORDER BY turn_index DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit as i64], row_to_turn)?;
+        let mut turns = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        turns.reverse();
+        Ok(turns)
+    }
+
+    /// Count turns after the most recent compaction marker for a session.
+    pub fn count_turns_since_last_compaction(&self, session_id: &str) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM turns
+             WHERE session_id = ?1
+               AND turn_index > COALESCE(
+                   (SELECT MAX(turn_index) FROM turns WHERE session_id = ?1 AND is_compaction_event = 1),
+                   -1
+               )",
+            params![session_id],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    pub fn list_recent_task_runs(&self, limit: usize) -> Result<Vec<TaskRun>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, correlation_id, name, display_name, agent_type,
+                    execution_mode, requested_model, actual_model, started_at, completed_at,
+                    duration_ms, success, total_tokens, total_tool_calls,
+                    description_size_chars, prompt_size_chars, summary_size_chars, confidence
+             FROM task_runs
+             ORDER BY started_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], row_to_task_run)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
@@ -1408,14 +1731,76 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         project: row.get(1)?,
         project_name: row.get(2)?,
         slug: row.get(3)?,
-        model: row.get(4)?,
-        git_branch: row.get(5)?,
-        started_at: row.get(6)?,
-        last_turn_at: row.get(7)?,
-        total_turns: row.get(8)?,
-        is_subagent: row.get::<_, i32>(9)? != 0,
-        parent_session_id: row.get(10)?,
-        context_window_tokens: row.get(11)?,
+        provider: row.get(4)?,
+        provider_version: row.get(5)?,
+        model: row.get(6)?,
+        git_branch: row.get(7)?,
+        started_at: row.get(8)?,
+        last_turn_at: row.get(9)?,
+        total_turns: row.get(10)?,
+        is_subagent: row.get::<_, i32>(11)? != 0,
+        parent_session_id: row.get(12)?,
+        context_window_tokens: row.get(13)?,
+    })
+}
+
+fn row_to_interaction_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<InteractionEvent> {
+    Ok(InteractionEvent {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        turn_id: row.get(2)?,
+        task_run_id: row.get(3)?,
+        correlation_id: row.get(4)?,
+        parent_id: row.get(5)?,
+        provider: row.get(6)?,
+        timestamp: row.get(7)?,
+        kind: row.get(8)?,
+        phase: row.get(9)?,
+        name: row.get(10)?,
+        display_name: row.get(11)?,
+        mcp_server: row.get(12)?,
+        mcp_tool: row.get(13)?,
+        hook_type: row.get(14)?,
+        agent_type: row.get(15)?,
+        execution_mode: row.get(16)?,
+        model: row.get(17)?,
+        status: row.get(18)?,
+        success: row.get::<_, Option<i32>>(19)?.map(|v| v != 0),
+        input_size_chars: row.get(20)?,
+        output_size_chars: row.get(21)?,
+        prompt_size_chars: row.get(22)?,
+        summary_size_chars: row.get(23)?,
+        total_tokens: row.get(24)?,
+        total_tool_calls: row.get(25)?,
+        duration_ms: row.get(26)?,
+        estimated_input_tokens: row.get(27)?,
+        estimated_output_tokens: row.get(28)?,
+        estimated_cost_usd: row.get(29)?,
+        confidence: row.get(30)?,
+    })
+}
+
+fn row_to_task_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRun> {
+    Ok(TaskRun {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        correlation_id: row.get(2)?,
+        name: row.get(3)?,
+        display_name: row.get(4)?,
+        agent_type: row.get(5)?,
+        execution_mode: row.get(6)?,
+        requested_model: row.get(7)?,
+        actual_model: row.get(8)?,
+        started_at: row.get(9)?,
+        completed_at: row.get(10)?,
+        duration_ms: row.get(11)?,
+        success: row.get::<_, Option<i32>>(12)?.map(|v| v != 0),
+        total_tokens: row.get(13)?,
+        total_tool_calls: row.get(14)?,
+        description_size_chars: row.get(15)?,
+        prompt_size_chars: row.get(16)?,
+        summary_size_chars: row.get(17)?,
+        confidence: row.get(18)?,
     })
 }
 
@@ -1470,6 +1855,8 @@ mod tests {
             project: "/home/user/project".to_string(),
             project_name: "project".to_string(),
             slug: "test-session".to_string(),
+            provider: "claude-code".to_string(),
+            provider_version: "2.1.15".to_string(),
             model: "claude-opus-4-5-20251101".to_string(),
             git_branch: "main".to_string(),
             started_at: 1_700_000_000_000,
@@ -1502,6 +1889,71 @@ mod tests {
             service_tier: "standard".to_string(),
             estimated_cost_usd: 0.005,
             is_compaction_event: false,
+        }
+    }
+
+    fn make_task_run(id: &str, session_id: &str) -> TaskRun {
+        TaskRun {
+            id: id.to_string(),
+            session_id: session_id.to_string(),
+            correlation_id: Some(format!("corr-{id}")),
+            name: "task".to_string(),
+            display_name: Some("Background task".to_string()),
+            agent_type: "task".to_string(),
+            execution_mode: "background".to_string(),
+            requested_model: Some("claude-sonnet-4.5".to_string()),
+            actual_model: Some("claude-sonnet-4.5".to_string()),
+            started_at: 1_700_000_000_100,
+            completed_at: Some(1_700_000_001_100),
+            duration_ms: Some(1000),
+            success: Some(true),
+            total_tokens: Some(4096),
+            total_tool_calls: Some(6),
+            description_size_chars: 32,
+            prompt_size_chars: 256,
+            summary_size_chars: 64,
+            confidence: "exact".to_string(),
+        }
+    }
+
+    fn make_interaction_event(
+        id: &str,
+        session_id: &str,
+        turn_id: &str,
+        task_run_id: &str,
+    ) -> InteractionEvent {
+        InteractionEvent {
+            id: id.to_string(),
+            session_id: session_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            task_run_id: Some(task_run_id.to_string()),
+            correlation_id: Some("tool-1".to_string()),
+            parent_id: None,
+            provider: "copilot-cli".to_string(),
+            timestamp: 1_700_000_000_500,
+            kind: "mcp".to_string(),
+            phase: "complete".to_string(),
+            name: "gitnexus-query".to_string(),
+            display_name: Some("GitNexus Query".to_string()),
+            mcp_server: Some("gitnexus".to_string()),
+            mcp_tool: Some("query".to_string()),
+            hook_type: None,
+            agent_type: Some("task".to_string()),
+            execution_mode: Some("background".to_string()),
+            model: Some("claude-sonnet-4.5".to_string()),
+            status: Some("completed".to_string()),
+            success: Some(true),
+            input_size_chars: 120,
+            output_size_chars: 80,
+            prompt_size_chars: 0,
+            summary_size_chars: 0,
+            total_tokens: Some(256),
+            total_tool_calls: Some(1),
+            duration_ms: Some(250),
+            estimated_input_tokens: 30,
+            estimated_output_tokens: 20,
+            estimated_cost_usd: 0.001,
+            confidence: "estimated".to_string(),
         }
     }
 
@@ -1813,6 +2265,40 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "bash");
         assert_eq!(calls[0].input_size_chars, 42);
+    }
+
+    #[test]
+    fn test_task_run_and_interaction_event_upsert_and_list() {
+        let db = Database::open_in_memory().unwrap();
+        let sess = make_session("prov-sess");
+        db.upsert_session(&sess).unwrap();
+        db.upsert_turn(&make_turn("prov-turn-0", "prov-sess", 0))
+            .unwrap();
+
+        let task = make_task_run("task-1", "prov-sess");
+        let event = make_interaction_event("evt-1", "prov-sess", "prov-turn-0", "task-1");
+
+        db.upsert_task_run(&task).unwrap();
+        db.upsert_task_run(&task).unwrap();
+        db.upsert_interaction_event(&event).unwrap();
+        db.upsert_interaction_event(&event).unwrap();
+
+        let tasks = db.list_task_runs_for_session("prov-sess").unwrap();
+        let events = db
+            .list_interaction_events_for_session("prov-sess", 10)
+            .unwrap();
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].requested_model.as_deref(),
+            Some("claude-sonnet-4.5")
+        );
+        assert_eq!(tasks[0].total_tool_calls, Some(6));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].mcp_server.as_deref(), Some("gitnexus"));
+        assert_eq!(events[0].task_run_id.as_deref(), Some("task-1"));
+        assert_eq!(events[0].total_tokens, Some(256));
     }
 
     #[test]

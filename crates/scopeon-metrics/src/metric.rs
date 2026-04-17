@@ -1,4 +1,4 @@
-use scopeon_core::{DailyRollup, Session, ToolCall, Turn};
+use scopeon_core::{DailyRollup, InteractionEvent, Session, TaskRun, ToolCall, Turn};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetricValue {
@@ -18,6 +18,8 @@ pub struct MetricContext<'a> {
     pub daily_rollups: &'a [DailyRollup],
     pub provider_name: &'a str,
     pub tool_calls: &'a [ToolCall],
+    pub interaction_events: &'a [InteractionEvent],
+    pub task_runs: &'a [TaskRun],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -15,8 +15,8 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use chrono::{Datelike, Timelike};
 use scopeon_core::{
-    AgentNode, Database, GlobalStats, ProjectStats, Session, SessionAnomaly, SessionStats,
-    SessionSummary, ToolCall, ToolStat, UserConfig,
+    AgentNode, Database, GlobalStats, InteractionEvent, ProjectStats, Session, SessionAnomaly,
+    SessionStats, SessionSummary, TaskRun, ToolCall, ToolStat, UserConfig,
 };
 use scopeon_metrics::{
     compute_health_score_with_breakdown, MetricCategory, MetricRegistry, MetricValue, Suggestion,
@@ -151,6 +151,8 @@ pub struct App {
     // Live session
     pub live_stats: Option<SessionStats>,
     pub live_tool_calls: Vec<ToolCall>,
+    pub live_interaction_events: Vec<InteractionEvent>,
+    pub live_task_runs: Vec<TaskRun>,
     pub is_live: bool,                 // true = last turn < LIVE_THRESHOLD ago
     pub active_sessions: Vec<Session>, // all sessions with recent activity
     pub copilot_active: bool,          // Copilot VS Code log freshness
@@ -166,6 +168,8 @@ pub struct App {
     pub session_summaries: std::collections::HashMap<String, SessionSummary>,
     pub selected_session_idx: usize,
     pub selected_session_stats: Option<SessionStats>,
+    pub selected_session_interaction_events: Vec<InteractionEvent>,
+    pub selected_session_task_runs: Vec<TaskRun>,
     pub session_detail_mode: bool,
     pub turn_scroll_detail: usize,
     pub sessions_filter: String,
@@ -265,6 +269,8 @@ impl App {
             registry: MetricRegistry::default(),
             live_stats: None,
             live_tool_calls: Vec::new(),
+            live_interaction_events: Vec::new(),
+            live_task_runs: Vec::new(),
             is_live: false,
             active_sessions: Vec::new(),
             copilot_active: false,
@@ -276,6 +282,8 @@ impl App {
             session_summaries: std::collections::HashMap::new(),
             selected_session_idx: 0,
             selected_session_stats: None,
+            selected_session_interaction_events: Vec::new(),
+            selected_session_task_runs: Vec::new(),
             session_detail_mode: false,
             turn_scroll_detail: 0,
             sessions_filter: String::new(),
@@ -328,6 +336,15 @@ impl App {
         if let Ok(Some(sid)) = db.get_latest_session_id() {
             self.live_stats = db.get_session_stats(&sid).ok();
             self.live_tool_calls = db.list_tool_calls_for_session(&sid).unwrap_or_default();
+            self.live_interaction_events = db
+                .list_interaction_events_for_session(&sid, 10_000)
+                .unwrap_or_default();
+            self.live_task_runs = db.list_task_runs_for_session(&sid).unwrap_or_default();
+        } else {
+            self.live_stats = None;
+            self.live_tool_calls.clear();
+            self.live_interaction_events.clear();
+            self.live_task_runs.clear();
         }
 
         // Determine staleness from last_turn_at
@@ -386,6 +403,15 @@ impl App {
             {
                 self.selected_session_stats = db.get_session_stats(sel_id).ok();
             }
+            self.selected_session_interaction_events = db
+                .list_interaction_events_for_session(sel_id, 10_000)
+                .unwrap_or_default();
+            self.selected_session_task_runs =
+                db.list_task_runs_for_session(sel_id).unwrap_or_default();
+        } else {
+            self.selected_session_stats = None;
+            self.selected_session_interaction_events.clear();
+            self.selected_session_task_runs.clear();
         }
 
         // ── Adaptive thresholds (from historical daily_rollup) ───────────────
@@ -405,15 +431,20 @@ impl App {
                 turns: &stats.turns,
                 session: stats.session.as_ref(),
                 daily_rollups: daily,
-                provider_name: "claude-code",
+                provider_name: stats
+                    .session
+                    .as_ref()
+                    .map(|s| s.provider.as_str())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("unknown"),
                 tool_calls: &self.live_tool_calls,
+                interaction_events: &self.live_interaction_events,
+                task_runs: &self.live_task_runs,
             };
             let waste = WasteReport::compute_with_thresholds(&ctx, &self.user_thresholds);
             let (score, breakdown) = compute_health_score_with_breakdown(&ctx, &waste);
             self.health_score = score;
             self.health_breakdown = Some(breakdown);
-            // D6: Persist health score to daily_rollup for trend history.
-            let _ = db.update_today_health_score(self.health_score);
             self.suggestions =
                 scopeon_metrics::compute_suggestions(&ctx, &waste, self.global_stats.as_ref());
             self.waste_report = Some(waste);
@@ -1830,10 +1861,11 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
     let splash_start = Instant::now();
 
     app.refresh_in_progress = true;
-    {
-        let db = db.lock().unwrap();
-        app.refresh(&db);
+    if let Ok(db_guard) = db.try_lock() {
+        app.refresh(&db_guard);
     }
+    // If try_lock fails the backfill holds the mutex; spinner stays visible
+    // and we retry after the splash delay.
 
     // Hold splash for at least 1 500 ms so it's actually readable.
     let elapsed = splash_start.elapsed();
@@ -1878,8 +1910,11 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
 
         if app.last_refresh.elapsed() >= app.refresh_interval {
             app.refresh_in_progress = true;
-            let db = db.lock().unwrap();
-            app.refresh(&db);
+            if let Ok(db_guard) = db.try_lock() {
+                app.refresh(&db_guard);
+            }
+            // If try_lock fails (backfill holds mutex), skip this tick.
+            // The spinner stays visible and we retry on the next cycle.
         }
     }
 

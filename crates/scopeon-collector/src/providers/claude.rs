@@ -3,6 +3,7 @@ use crate::watcher;
 use anyhow::Result;
 use scopeon_core::Database;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 pub struct ClaudeCodeProvider {
     pub projects_dir: PathBuf,
@@ -50,6 +51,28 @@ impl Provider for ClaudeCodeProvider {
         let mut count = 0;
         for entry in walkdir_jsonl(&self.projects_dir) {
             watcher::process_file(&entry, db)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Override to release the DB mutex between files.
+    ///
+    /// With 31+ large JSONL files the default one-shot lock would block the
+    /// TUI for the entire backfill duration.  Releasing between files lets
+    /// the TUI refresh in the gaps.
+    fn scan_incremental(&self, db: Arc<Mutex<Database>>) -> Result<usize> {
+        if !self.is_available() {
+            return Ok(0);
+        }
+        let mut count = 0;
+        for entry in walkdir_jsonl(&self.projects_dir) {
+            {
+                let db_guard = db
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Database mutex poisoned"))?;
+                watcher::process_file(&entry, &db_guard)?;
+            } // lock released here — TUI can refresh before next file
             count += 1;
         }
         Ok(count)

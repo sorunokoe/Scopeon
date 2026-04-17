@@ -99,13 +99,13 @@ scopeon/                       ← CLI binary
     main.rs                    ← entry point, subcommand dispatch, tag CLI
     ci.rs                      ← `scopeon ci` snapshot + report
     serve.rs                   ← `scopeon serve` HTTP API + WebSocket dashboard
-    onboarding.rs              ← `scopeon init` MCP config wizard
+    onboarding.rs              ← first-run wizard + `scopeon onboard`
     shell_hook.rs              ← `scopeon shell-hook` prompt integration
     dashboard.html             ← embedded single-file browser dashboard
 crates/
-  scopeon-core/                ← models, SQLite schema (4 migrations, WAL), cost engine
+  scopeon-core/                ← models, SQLite schema, WAL-backed storage, cost engine
     src/
-      db.rs                    ← database: all queries, migrations, WAL + read-pool
+      db.rs                    ← database: all queries, migrations, WAL-backed connection
       models.rs                ← Session, Turn, ToolCall, GlobalStats, DailyRollup
       cost.rs                  ← per-model pricing, cache savings calculation
       context.rs               ← context window sizes per model, fill % calculation
@@ -295,7 +295,7 @@ cargo test -- --nocapture               # show println! output
 ### What to test
 
 - **Pure functions** (cost calculations, context pressure, cache hit rate): exhaustive unit tests with representative inputs and edge cases.
-- **Database functions**: use `Database::open_in_memory()` — no temp files needed. All 4 migrations run automatically on in-memory DBs.
+- **Database functions**: use `Database::open_in_memory()` — no temp files needed. All migrations run automatically on in-memory DBs.
 - **Parsers**: include at least one test with a real-format sample log line.
 - **MCP dispatch**: verify that each tool returns a valid JSON-RPC result structure.
 - **Threshold calculations**: include tests for the P10/P90 percentile boundary cases (< 7 days → defaults, ≥ 7 days → computed).
@@ -395,5 +395,3 @@ For larger changes (new crate, major refactor, new CLI subcommand), open the iss
 ## License
 
 By contributing, you agree that your contributions will be licensed under the same **MIT OR Apache-2.0** terms as the rest of the project. No contributor license agreement is required.
-
-

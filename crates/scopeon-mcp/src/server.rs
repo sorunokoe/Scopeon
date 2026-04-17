@@ -5,13 +5,16 @@
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tracing::{debug, info};
 
-use scopeon_core::{redact_webhook_url, Database, UserConfig};
+use scopeon_core::{
+    derive_hook_effects, interaction_token_total, provider_capabilities, redact_webhook_url,
+    Database, UserConfig,
+};
 use scopeon_metrics::{compute_suggestions, MetricContext, WasteReport};
 
 /// §4.5: Single shared stdout writer protected by an async Mutex.
@@ -41,6 +44,9 @@ struct MetricSnapshot {
     context_pressure: Option<Value>,
     budget_status: Option<Value>,
     optimization_suggestions: Option<Value>,
+    interaction_history: Option<Value>,
+    task_history: Option<Value>,
+    provider_capabilities: Option<Value>,
     suggest_compact: Option<Value>,
     project_stats: Option<Value>,
     sessions_list: Option<Value>,
@@ -70,15 +76,18 @@ fn adaptive_interval(snap: &MetricSnapshot) -> std::time::Duration {
 
 /// Compute a fresh `MetricSnapshot` from the database.
 /// The caller must hold the DB mutex.
-fn refresh_snapshot(db: &Database) -> MetricSnapshot {
+fn refresh_snapshot(db: &Database, config: &UserConfig) -> MetricSnapshot {
     MetricSnapshot {
         token_usage: Some(handle_get_token_usage(db)),
         session_summary: Some(handle_get_session_summary(db, None)),
         cache_efficiency: Some(handle_get_cache_efficiency(db, None)),
         history_30d: Some(handle_get_history(db, 30)),
         context_pressure: Some(handle_get_context_pressure(db)),
-        budget_status: Some(handle_get_budget_status(db)),
+        budget_status: Some(handle_get_budget_status(db, config)),
         optimization_suggestions: Some(handle_get_optimization_suggestions(db)),
+        interaction_history: Some(handle_get_interaction_history(db, None, 100)),
+        task_history: Some(handle_get_task_history(db, None, 25)),
+        provider_capabilities: Some(handle_get_provider_capabilities(db, None)),
         suggest_compact: Some(handle_suggest_compact(db)),
         project_stats: Some(handle_get_project_stats(db, None)),
         sessions_list: Some(handle_list_sessions(db, 20)),
@@ -112,11 +121,12 @@ fn snap_or_live<F: FnOnce(&Arc<Mutex<Database>>) -> Value>(
 /// no `id` field (fire-and-forget per JSON-RPC 2.0 §4).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum AlertKind {
-    ContextCrisis,  // fill_pct >= 95%
-    ContextWarning, // fill_pct >= 80%
-    BudgetWarning,  // daily spend > 90% of limit
-    LowTurnsLeft,   // predicted_turns_remaining <= 5
+    ContextCrisis,       // fill_pct >= 95%
+    ContextWarning,      // fill_pct >= 80%
+    BudgetWarning,       // daily spend > 90% of limit
+    LowTurnsLeft,        // predicted_turns_remaining <= 5
     CompactionDetected,
+    CompactionAdvisory,  // S-7: pre-crisis optimal compaction window (55–79%, accelerating)
 }
 
 #[derive(Debug, Clone)]
@@ -285,12 +295,122 @@ fn check_alerts(
     }
 }
 
+/// S-7: Compute a compaction advisory score (0–1) from fill history.
+///
+/// The score combines:
+/// - Current fill percentage (higher = more urgent)
+/// - Fill acceleration (rate-of-change of slope — catches fast-rising sessions)
+/// - Inverse cache-write fraction (compaction is cheaper when the model is NOT
+///   mid-write: high cache_write_frac means a compaction right now would discard
+///   an expensive cache layer, so we back off)
+///
+/// Returns a score in [0, 1]. Fire advisory when score > 0.65 and fill is in the
+/// 55–79% pre-crisis window.
+fn compaction_advisory_score(
+    fill_pct: f64,
+    fill_history: &std::collections::VecDeque<f64>,
+    cache_write_frac: f64,
+) -> f64 {
+    // Need at least 3 samples for acceleration measurement.
+    if fill_history.len() < 3 {
+        return 0.0;
+    }
+    let n = fill_history.len();
+    // Recent slope (last two samples).
+    let s1 = fill_history[n - 1] - fill_history[n - 2];
+    // Earlier slope (second-to-last pair).
+    let s0 = fill_history[n - 2] - fill_history[n - 3];
+
+    // Acceleration ratio: clamped and normalised to [0, 1].
+    let accel_ratio = if s0.abs() > 0.5 {
+        ((s1 - s0) / s0.abs()).clamp(0.0, 3.0) / 3.0
+    } else if s1 > 1.0 {
+        // s0 near zero but s1 is rising — treat as moderate acceleration.
+        0.4
+    } else {
+        0.0
+    };
+
+    // Penalise when cache writes are active (compact later to avoid discarding cache).
+    let cache_penalty = 1.0 - cache_write_frac.clamp(0.0, 1.0);
+
+    (fill_pct / 100.0) * (0.4 + 0.6 * accel_ratio) * cache_penalty
+}
+
+/// S-7: Check whether the advisory compaction notification should fire.
+fn check_compaction_advisory(
+    snap: &MetricSnapshot,
+    fill_history: &std::collections::VecDeque<f64>,
+    debounce: &mut AlertDebounce,
+    tx: &tokio::sync::mpsc::Sender<Alert>,
+) {
+    let fill_pct = snap
+        .context_pressure
+        .as_ref()
+        .and_then(|v| v.get("fill_pct"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+
+    // Only advise in the pre-crisis window.
+    if !(55.0..80.0).contains(&fill_pct) {
+        return;
+    }
+
+    // Compute cache-write fraction to avoid advising mid-cache-write.
+    let cache_write_frac = snap
+        .token_usage
+        .as_ref()
+        .and_then(|v| {
+            let write = v.get("cache_write_tokens").and_then(Value::as_f64).unwrap_or(0.0);
+            let total = v.get("total_tokens").and_then(Value::as_f64).unwrap_or(0.0);
+            (total > 0.0).then_some(write / total)
+        })
+        .unwrap_or(0.0);
+
+    let score = compaction_advisory_score(fill_pct, fill_history, cache_write_frac);
+
+    if score > 0.65 && debounce.should_fire(&AlertKind::CompactionAdvisory) {
+        let predicted = snap
+            .context_pressure
+            .as_ref()
+            .and_then(|v| v.get("predicted_turns_remaining"))
+            .and_then(Value::as_i64);
+        let _ = tx.try_send(Alert {
+            payload: json!({
+                "method": "notifications/scopeon/alert",
+                "params": {
+                    "type": "compaction_advisory",
+                    "severity": "info",
+                    "message": format!(
+                        "Optimal compaction window: context {:.0}% full and accelerating{}. \
+                         Compact now to maximise cache savings.",
+                        fill_pct,
+                        predicted
+                            .map(|t| format!(" (~{} turns remain)", t))
+                            .unwrap_or_default()
+                    ),
+                    "fill_pct": fill_pct,
+                    "advisory_score": score,
+                    "predicted_turns_remaining": predicted,
+                    "should_compact": true,
+                }
+            }),
+        });
+    }
+}
+
 /// Fire configured webhooks for an alert.
 ///
 /// Uses a plain HTTP/1.1 POST over tokio TCP — no reqwest dependency.
 /// Failures are logged as warnings but never propagated to the caller.
 async fn fire_webhooks(config: &UserConfig, alert_type: &str, payload: &Value) {
-    let body = serde_json::to_string(payload).unwrap_or_default();
+    let body = match serde_json::to_string(payload) {
+        Ok(body) => body,
+        Err(e) => {
+            tracing::warn!("Failed to serialize webhook payload: {}", e);
+            return;
+        },
+    };
 
     for wh in &config.alerts.webhooks {
         // Filter by configured event types (empty list = all events)
@@ -354,9 +474,15 @@ async fn do_http_post(url: &str, body: &str) -> Result<()> {
 
     // Check the HTTP response code (captured via -w %{http_code}).
     let http_code = String::from_utf8_lossy(&status.stdout);
-    let code: u16 = http_code.trim().parse().unwrap_or(0);
-    if code != 0 && !(200..300).contains(&code) {
-        tracing::warn!("Webhook to {} returned HTTP {}", display_url, code);
+    let code: u16 = http_code.trim().parse().with_context(|| {
+        format!(
+            "Invalid HTTP status code '{}' from webhook {}",
+            http_code.trim(),
+            display_url
+        )
+    })?;
+    if !(200..300).contains(&code) {
+        anyhow::bail!("Webhook to {} returned HTTP {}", display_url, code);
     }
 
     Ok(())
@@ -490,6 +616,53 @@ fn tool_list() -> Value {
                 "inputSchema": { "type": "object", "properties": {}, "required": [] }
             },
             {
+                "name": "get_interaction_history",
+                "description": "Get normalized provenance for tool, MCP, skill, hook, and subagent interactions in a session. Includes confidence-tagged token attribution and derived hook effects.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session ID to query. Omit for most recent session."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of recent interaction events to return (default: 100)."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "get_task_history",
+                "description": "Get derived task and subagent history for a session, including prompt sizes, tool fan-out, token totals, models, and related interaction summaries.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session ID to query. Omit for most recent session."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of most-recent task runs to return (default: 25)."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "get_provider_capabilities",
+                "description": "Show which provenance features the current provider supports exactly, estimates, or cannot expose, so downstream suggestions do not pretend unsupported detail exists.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session ID to inspect. Omit for most recent session."
+                        }
+                    }
+                }
+            },
+            {
                 "name": "suggest_compact",
                 "description": "Returns whether you should run /compact right now, with reason, current fill%, and how many turns since the last compaction.",
                 "inputSchema": { "type": "object", "properties": {}, "required": [] }
@@ -556,7 +729,7 @@ fn handle_get_token_usage(db: &Database) -> Value {
         Ok(Some(id)) => id,
         _ => return json!({"error": "No sessions found. Run Claude Code first."}),
     };
-    match db.get_session_stats(&session_id) {
+    match db.get_session_aggregates(&session_id) {
         Ok(stats) => {
             let total_context = stats.total_input_tokens + stats.total_cache_read_tokens;
             json!({
@@ -585,12 +758,9 @@ fn handle_get_token_usage(db: &Database) -> Value {
 }
 
 fn handle_get_session_summary(db: &Database, session_id: Option<&str>) -> Value {
-    let sid = match session_id {
-        Some(id) => id.to_string(),
-        None => match db.get_latest_session_id() {
-            Ok(Some(id)) => id,
-            _ => return json!({"error": "No sessions found."}),
-        },
+    let sid = match resolve_session_id(db, session_id) {
+        Ok(id) => id,
+        Err(err) => return err,
     };
     match db.get_session_stats(&sid) {
         Ok(stats) => {
@@ -611,8 +781,20 @@ fn handle_get_session_summary(db: &Database, session_id: Option<&str>) -> Value 
                     })
                 })
                 .collect();
+            let session = stats.session.as_ref();
             json!({
                 "session_id": sid,
+                "session": {
+                    "slug": session.map(|s| s.slug.clone()),
+                    "project": session.map(|s| s.project_name.clone()),
+                    "branch": session.map(|s| s.git_branch.clone()),
+                    "provider": session.map(|s| s.provider.clone()),
+                    "provider_version": session.map(|s| s.provider_version.clone()),
+                    "model": session.map(|s| s.model.clone()),
+                    "context_window_tokens": session.and_then(|s| s.context_window_tokens),
+                    "started_at": session.map(|s| s.started_at),
+                    "last_turn_at": session.map(|s| s.last_turn_at),
+                },
                 "turns": turns_summary,
                 "totals": {
                     "input_tokens": stats.total_input_tokens,
@@ -638,9 +820,11 @@ fn handle_get_cache_efficiency(db: &Database, session_id: Option<&str>) -> Value
             _ => return json!({"error": "No sessions found."}),
         },
     };
-    match db.get_session_stats(&sid) {
+    match db.get_session_aggregates(&sid) {
         Ok(stats) => {
-            let total_billable = stats.total_input_tokens + stats.total_cache_read_tokens;
+            let total_billable = stats.total_input_tokens
+                + stats.total_cache_read_tokens
+                + stats.total_cache_write_tokens;
             json!({
                 "session_id": sid,
                 "cache_hit_tokens": stats.total_cache_read_tokens,
@@ -680,9 +864,22 @@ fn handle_get_history(db: &Database, days: i64) -> Value {
     }
 }
 
+fn resolve_session_id(
+    db: &Database,
+    session_id: Option<&str>,
+) -> std::result::Result<String, Value> {
+    match session_id {
+        Some(id) => Ok(id.to_string()),
+        None => match db.get_latest_session_id() {
+            Ok(Some(id)) => Ok(id),
+            _ => Err(json!({"error": "No sessions found."})),
+        },
+    }
+}
+
 fn handle_compare_sessions(db: &Database, id_a: &str, id_b: &str) -> Value {
-    let a = db.get_session_stats(id_a);
-    let b = db.get_session_stats(id_b);
+    let a = db.get_session_aggregates(id_a);
+    let b = db.get_session_aggregates(id_b);
     // Determine which session is missing before consuming the results.
     let a_missing = a.is_err();
     let b_missing = b.is_err();
@@ -770,47 +967,47 @@ fn handle_get_context_pressure(db: &Database) -> Value {
         Ok(Some(id)) => id,
         _ => return json!({"error": "No sessions found."}),
     };
-    match db.get_session_stats(&sid) {
-        Ok(stats) => {
-            let session = stats.session.as_ref();
-            let model = session.map(|s| s.model.as_str()).unwrap_or("unknown");
-            let stored_window = session.and_then(|s| s.context_window_tokens);
-            let last_input = stats
-                .turns
-                .last()
-                .map(|t| t.input_tokens + t.cache_read_tokens)
-                .unwrap_or(0);
-            // §8.2: prefer stored context window from JSONL if available
-            let window =
-                stored_window.unwrap_or_else(|| scopeon_core::context_window_for_model(model));
-            let (fill_pct, tokens_remaining) =
-                scopeon_core::context_pressure_with_window(model, last_input, stored_window);
+    let session = match db.get_session(&sid) {
+        Ok(Some(session)) => session,
+        Ok(None) => return json!({"error": "Session metadata unavailable."}),
+        Err(e) => return json!({"error": e.to_string()}),
+    };
+    let model = session.model.as_str();
+    let stored_window = session.context_window_tokens;
+    let last_input = match db.get_last_turn_for_session(&sid) {
+        Ok(Some(turn)) => turn.input_tokens + turn.cache_read_tokens,
+        Ok(None) => 0,
+        Err(e) => return json!({"error": e.to_string()}),
+    };
+    let recent_turns = db
+        .list_recent_turns_for_session(&sid, 10)
+        .unwrap_or_default();
 
-            // Predictive countdown: fit a linear trend to the last ≤10 turns'
-            // total input size and extrapolate how many more turns remain before
-            // the context window is exhausted.
-            let predicted_turns_remaining = predict_turns_remaining(&stats.turns, tokens_remaining);
+    // §8.2: prefer stored context window from JSONL if available.
+    let window = stored_window.unwrap_or_else(|| scopeon_core::context_window_for_model(model));
+    let (fill_pct, tokens_remaining) =
+        scopeon_core::context_pressure_with_window(model, last_input, stored_window);
 
-            json!({
-                "session_id": sid,
-                "model": model,
-                "context_window_tokens": window,
-                "last_turn_input_tokens": last_input,
-                "fill_pct": fill_pct,
-                "tokens_remaining": tokens_remaining,
-                "should_compact": fill_pct >= 80.0,
-                "pressure_level": if fill_pct >= 95.0 { "critical" } else if fill_pct >= 80.0 { "high" } else { "normal" },
-                "predicted_turns_remaining": predicted_turns_remaining,
-            })
-        },
-        Err(e) => json!({"error": e.to_string()}),
-    }
+    // Predictive countdown: fit a linear trend to the last ≤10 turns'
+    // total input size and extrapolate how many more turns remain before
+    // the context window is exhausted.
+    let predicted_turns_remaining = predict_turns_remaining(&recent_turns, tokens_remaining);
+
+    json!({
+        "session_id": sid,
+        "model": model,
+        "context_window_tokens": window,
+        "last_turn_input_tokens": last_input,
+        "fill_pct": fill_pct,
+        "tokens_remaining": tokens_remaining,
+        "should_compact": fill_pct >= 80.0,
+        "pressure_level": if fill_pct >= 95.0 { "critical" } else if fill_pct >= 80.0 { "high" } else { "normal" },
+        "predicted_turns_remaining": predicted_turns_remaining,
+    })
 }
 
-fn handle_get_budget_status(db: &Database) -> Value {
+fn handle_get_budget_status(db: &Database, config: &UserConfig) -> Value {
     use chrono::Datelike;
-    use scopeon_core::user_config::UserConfig;
-    let config = UserConfig::load();
     let global = match db.get_global_stats() {
         Ok(g) => g,
         Err(e) => return json!({"error": e.to_string()}),
@@ -862,6 +1059,228 @@ fn handle_get_budget_status(db: &Database) -> Value {
     })
 }
 
+fn handle_get_provider_capabilities(db: &Database, session_id: Option<&str>) -> Value {
+    let sid = match resolve_session_id(db, session_id) {
+        Ok(id) => id,
+        Err(err) => return err,
+    };
+    let session = match db.get_session(&sid) {
+        Ok(Some(session)) => session,
+        Ok(None) => return json!({"error": "Session metadata unavailable."}),
+        Err(e) => return json!({"error": e.to_string()}),
+    };
+    let capabilities = provider_capabilities(&session.provider);
+    let exact = capabilities.iter().filter(|c| c.level == "exact").count();
+    let estimated = capabilities
+        .iter()
+        .filter(|c| c.level == "estimated")
+        .count();
+    let unsupported = capabilities
+        .iter()
+        .filter(|c| c.level == "unsupported")
+        .count();
+
+    json!({
+        "session_id": sid,
+        "provider": {
+            "name": session.provider,
+            "version": session.provider_version,
+            "model": session.model,
+        },
+        "support_summary": {
+            "exact": exact,
+            "estimated": estimated,
+            "unsupported": unsupported,
+        },
+        "capabilities": capabilities,
+    })
+}
+
+fn handle_get_interaction_history(db: &Database, session_id: Option<&str>, limit: usize) -> Value {
+    let sid = match resolve_session_id(db, session_id) {
+        Ok(id) => id,
+        Err(err) => return err,
+    };
+    let session = match db.get_session(&sid) {
+        Ok(Some(session)) => session,
+        Ok(None) => return json!({"error": "Session metadata unavailable."}),
+        Err(e) => return json!({"error": e.to_string()}),
+    };
+    let capabilities = provider_capabilities(&session.provider);
+    let events = match db.list_interaction_events_for_session(&sid, limit) {
+        Ok(events) => events,
+        Err(e) => return json!({"error": e.to_string()}),
+    };
+    let hook_effects = derive_hook_effects(&events);
+    let hook_effect_summary = {
+        let modified = hook_effects
+            .values()
+            .filter(|effect| effect.as_str() == "modified")
+            .count();
+        let blocked = hook_effects
+            .values()
+            .filter(|effect| effect.as_str() == "blocked")
+            .count();
+        let pass_through = hook_effects
+            .values()
+            .filter(|effect| effect.as_str() == "pass_through")
+            .count();
+        json!({
+            "modified": modified,
+            "blocked": blocked,
+            "pass_through": pass_through,
+            "observed": hook_effects.len().saturating_sub(modified + blocked + pass_through),
+        })
+    };
+    let data: Vec<Value> = events
+        .iter()
+        .map(|event| {
+            json!({
+                "id": event.id,
+                "timestamp": event.timestamp,
+                "turn_id": event.turn_id,
+                "task_run_id": event.task_run_id,
+                "correlation_id": event.correlation_id,
+                "parent_id": event.parent_id,
+                "kind": event.kind,
+                "phase": event.phase,
+                "name": event.name,
+                "display_name": event.display_name,
+                "provider": event.provider,
+                "status": event.status,
+                "success": event.success,
+                "hook_type": event.hook_type,
+                "agent_type": event.agent_type,
+                "execution_mode": event.execution_mode,
+                "model": event.model,
+                "mcp": {
+                    "server": event.mcp_server,
+                    "tool": event.mcp_tool,
+                },
+                "sizes": {
+                    "input_chars": event.input_size_chars,
+                    "output_chars": event.output_size_chars,
+                    "prompt_chars": event.prompt_size_chars,
+                    "summary_chars": event.summary_size_chars,
+                },
+                "tokens": {
+                    "total": event.total_tokens,
+                    "estimated_input": event.estimated_input_tokens,
+                    "estimated_output": event.estimated_output_tokens,
+                    "attributed_total": interaction_token_total(event),
+                    "confidence": event.confidence,
+                },
+                "duration_ms": event.duration_ms,
+                "tool_calls": event.total_tool_calls,
+                "hook_effect": hook_effects.get(&event.id),
+            })
+        })
+        .collect();
+
+    json!({
+        "session_id": sid,
+        "provider": {
+            "name": session.provider,
+            "version": session.provider_version,
+            "model": session.model,
+        },
+        "capabilities": capabilities,
+        "hook_effect_summary": hook_effect_summary,
+        "count": data.len(),
+        "events": data,
+    })
+}
+
+fn handle_get_task_history(db: &Database, session_id: Option<&str>, limit: usize) -> Value {
+    let sid = match resolve_session_id(db, session_id) {
+        Ok(id) => id,
+        Err(err) => return err,
+    };
+    let session = match db.get_session(&sid) {
+        Ok(Some(session)) => session,
+        Ok(None) => return json!({"error": "Session metadata unavailable."}),
+        Err(e) => return json!({"error": e.to_string()}),
+    };
+    let capabilities = provider_capabilities(&session.provider);
+    let tasks = match db.list_recent_task_runs_for_session(&sid, limit) {
+        Ok(tasks) => tasks,
+        Err(e) => return json!({"error": e.to_string()}),
+    };
+    let events = db
+        .list_interaction_events_for_session(&sid, 10_000)
+        .unwrap_or_default();
+
+    let task_data: Vec<Value> = tasks
+        .iter()
+        .map(|task| {
+            let task_events: Vec<_> = events
+                .iter()
+                .filter(|event| event.task_run_id.as_deref() == Some(task.id.as_str()))
+                .collect();
+            let mut kinds = std::collections::BTreeMap::<String, usize>::new();
+            let mut tools = std::collections::BTreeSet::<String>::new();
+            let mut mcp_tools = std::collections::BTreeSet::<String>::new();
+
+            for event in &task_events {
+                *kinds.entry(event.kind.clone()).or_default() += 1;
+                if matches!(event.kind.as_str(), "tool" | "task" | "skill") {
+                    tools.insert(event.name.clone());
+                }
+                if event.kind == "mcp" {
+                    let label = match (&event.mcp_server, &event.mcp_tool) {
+                        (Some(server), Some(tool)) => format!("{server}.{tool}"),
+                        _ => event.name.clone(),
+                    };
+                    mcp_tools.insert(label);
+                }
+            }
+
+            json!({
+                "id": task.id,
+                "correlation_id": task.correlation_id,
+                "name": task.name,
+                "display_name": task.display_name,
+                "agent_type": task.agent_type,
+                "execution_mode": task.execution_mode,
+                "requested_model": task.requested_model,
+                "actual_model": task.actual_model,
+                "started_at": task.started_at,
+                "completed_at": task.completed_at,
+                "duration_ms": task.duration_ms,
+                "success": task.success,
+                "tokens": {
+                    "total": task.total_tokens,
+                    "confidence": task.confidence,
+                },
+                "tool_calls": task.total_tool_calls,
+                "payload_sizes": {
+                    "description_chars": task.description_size_chars,
+                    "prompt_chars": task.prompt_size_chars,
+                    "summary_chars": task.summary_size_chars,
+                },
+                "interaction_summary": {
+                    "count": task_events.len(),
+                    "by_kind": kinds,
+                    "tools_used": tools.into_iter().collect::<Vec<_>>(),
+                    "mcp_tools_used": mcp_tools.into_iter().collect::<Vec<_>>(),
+                },
+            })
+        })
+        .collect();
+
+    json!({
+        "session_id": sid,
+        "provider": {
+            "name": session.provider,
+            "version": session.provider_version,
+            "model": session.model,
+        },
+        "capabilities": capabilities,
+        "count": task_data.len(),
+        "tasks": task_data,
+    })
+}
+
 fn handle_get_optimization_suggestions(db: &Database) -> Value {
     let sid = match db.get_latest_session_id() {
         Ok(Some(id)) => id,
@@ -872,13 +1291,25 @@ fn handle_get_optimization_suggestions(db: &Database) -> Value {
         Err(e) => return json!({"error": e.to_string()}),
     };
     let tool_calls = db.list_tool_calls_for_session(&sid).unwrap_or_default();
+    let interaction_events = db
+        .list_interaction_events_for_session(&sid, 10_000)
+        .unwrap_or_default();
+    let task_runs = db.list_task_runs_for_session(&sid).unwrap_or_default();
     let global = db.get_global_stats().ok();
+    let provider_name = stats
+        .session
+        .as_ref()
+        .map(|s| s.provider.as_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("unknown");
     let ctx = MetricContext {
         turns: &stats.turns,
         session: stats.session.as_ref(),
         daily_rollups: global.as_ref().map(|g| g.daily.as_slice()).unwrap_or(&[]),
-        provider_name: "claude-code",
+        provider_name,
         tool_calls: &tool_calls,
+        interaction_events: &interaction_events,
+        task_runs: &task_runs,
     };
     let thresholds = db
         .get_threshold_data()
@@ -915,8 +1346,27 @@ fn handle_get_optimization_suggestions(db: &Database) -> Value {
         })
         .collect();
 
+    let capabilities = provider_capabilities(provider_name);
+    let hook_effects = derive_hook_effects(&interaction_events);
+    let hook_effect_summary = json!({
+        "modified": hook_effects.values().filter(|effect| effect.as_str() == "modified").count(),
+        "blocked": hook_effects.values().filter(|effect| effect.as_str() == "blocked").count(),
+        "pass_through": hook_effects.values().filter(|effect| effect.as_str() == "pass_through").count(),
+    });
+
     json!({
         "session_id": sid,
+        "provider": {
+            "name": provider_name,
+            "version": stats.session.as_ref().map(|s| s.provider_version.clone()),
+            "model": stats.session.as_ref().map(|s| s.model.clone()),
+            "capabilities": capabilities,
+        },
+        "provenance_summary": {
+            "interaction_events": interaction_events.len(),
+            "task_runs": task_runs.len(),
+            "hook_effects": hook_effect_summary,
+        },
         "waste_signals": waste_signals,
         "suggestions": suggestion_list,
         "waste_score": waste.waste_score,
@@ -928,32 +1378,24 @@ fn handle_suggest_compact(db: &Database) -> Value {
         Ok(Some(id)) => id,
         _ => return json!({"error": "No sessions found."}),
     };
-    let stats = match db.get_session_stats(&sid) {
-        Ok(s) => s,
+    let session = match db.get_session(&sid) {
+        Ok(Some(session)) => session,
+        Ok(None) => return json!({"error": "Session metadata unavailable."}),
         Err(e) => return json!({"error": e.to_string()}),
     };
-    let model = stats
-        .session
-        .as_ref()
-        .map(|s| s.model.as_str())
-        .unwrap_or("unknown");
-    let stored_window = stats.session.as_ref().and_then(|s| s.context_window_tokens);
-    let last_input = stats
-        .turns
-        .last()
-        .map(|t| t.input_tokens + t.cache_read_tokens)
-        .unwrap_or(0);
+    let model = session.model.as_str();
+    let stored_window = session.context_window_tokens;
+    let last_input = match db.get_last_turn_for_session(&sid) {
+        Ok(Some(turn)) => turn.input_tokens + turn.cache_read_tokens,
+        Ok(None) => 0,
+        Err(e) => return json!({"error": e.to_string()}),
+    };
     // §8.2: prefer stored context window from JSONL if available
     let (fill_pct, _) =
         scopeon_core::context_pressure_with_window(model, last_input, stored_window);
 
     // Count turns since last compaction event
-    let turns_since_compact = stats
-        .turns
-        .iter()
-        .rev()
-        .take_while(|t| !t.is_compaction_event)
-        .count() as i64;
+    let turns_since_compact = db.count_turns_since_last_compaction(&sid).unwrap_or(0);
     let last_compact_was_recent = turns_since_compact < 10;
 
     let should_compact = fill_pct >= 80.0 && !last_compact_was_recent;
@@ -1024,7 +1466,9 @@ fn handle_list_sessions(db: &Database, limit: usize) -> Value {
             json!({
                 "session_id": s.id,
                 "project": s.project_name,
-                "model": s.model,
+                "provider": s.provider.clone(),
+                "provider_version": s.provider_version.clone(),
+                "model": s.model.clone(),
                 "branch": s.git_branch,
                 "is_subagent": s.is_subagent,
                 "turn_count": s.total_turns,
@@ -1061,6 +1505,7 @@ pub async fn run_mcp_server(db: Arc<Mutex<Database>>) -> Result<()> {
     let stdout: SharedWriter =
         Arc::new(tokio::sync::Mutex::new(BufWriter::new(tokio::io::stdout())));
     let config = UserConfig::load();
+    let snapshot_config = config.clone();
     // Bound individual stdin lines to 4 MiB *before* allocating, preventing OOM
     // from a sender that writes gigabytes without a newline. We use take() so the
     // kernel-level buffer is capped before read_line allocates its String.
@@ -1092,6 +1537,14 @@ pub async fn run_mcp_server(db: Arc<Mutex<Database>>) -> Result<()> {
     tokio::spawn(async move {
         // 60-second cooldown per alert kind to prevent notification spam.
         let mut debounce = AlertDebounce::new(60);
+        let mut first_refresh = true;
+
+        // S-7: Track fill_pct history (last 5 samples) for acceleration detection.
+        let mut fill_history: std::collections::VecDeque<f64> = std::collections::VecDeque::with_capacity(5);
+
+        // S-3: Ambient status push every 30 s when not in crisis (no token cost).
+        let mut last_ambient = std::time::Instant::now();
+        const AMBIENT_INTERVAL_SECS: u64 = 30;
 
         // Open a dedicated read-only connection to avoid holding the write mutex
         // during the (potentially slow) full-snapshot computation.
@@ -1102,23 +1555,24 @@ pub async fn run_mcp_server(db: Arc<Mutex<Database>>) -> Result<()> {
         // Do an immediate first refresh so the snapshot is populated before the
         // first MCP call arrives.
         loop {
-            let interval = {
-                let guard = snapshot_writer.read().unwrap_or_else(|p| p.into_inner());
-                adaptive_interval(&guard)
-            };
-            tokio::time::sleep(interval).await;
+            if !first_refresh {
+                let interval = {
+                    let guard = snapshot_writer.read().unwrap_or_else(|p| p.into_inner());
+                    adaptive_interval(&guard)
+                };
+                tokio::time::sleep(interval).await;
+            }
+            first_refresh = false;
 
             // Prefer the dedicated read connection; fall back to shared mutex.
             let new_snap = if let Some(rdb) = &read_db {
-                // Zero-contention path: read-only connection, no mutex.
-                scopeon_core::Database::open_readonly(rdb.path().unwrap())
-                    .ok()
-                    .map(|fresh| refresh_snapshot(&fresh))
-                    .unwrap_or_else(|| refresh_snapshot(rdb))
+                // Zero-contention path: reuse one read-only handle instead of reopening
+                // SQLite connections inside the refresh loop.
+                refresh_snapshot(rdb, &snapshot_config)
             } else {
                 match db_snap.lock() {
                     Ok(guard) => {
-                        let s = refresh_snapshot(&guard);
+                        let s = refresh_snapshot(&guard, &snapshot_config);
                         drop(guard);
                         s
                     },
@@ -1131,11 +1585,86 @@ pub async fn run_mcp_server(db: Arc<Mutex<Database>>) -> Result<()> {
                 }
             };
 
+            // S-7: Maintain rolling fill_pct history for acceleration scoring.
+            let fill_pct = new_snap
+                .context_pressure
+                .as_ref()
+                .and_then(|v| v.get("fill_pct"))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            if fill_history.len() == 5 {
+                fill_history.pop_front();
+            }
+            fill_history.push_back(fill_pct);
+
             // Check alert conditions before updating the shared snapshot.
             check_alerts(&new_snap, &mut debounce, &alert_tx);
 
+            // S-7: Compaction advisory — pre-crisis optimal compact window.
+            check_compaction_advisory(&new_snap, &fill_history, &mut debounce, &alert_tx);
+
             if let Ok(mut w) = snapshot_writer.write() {
                 *w = new_snap;
+            }
+
+            // S-3: Ambient status push — zero-token periodic notification at 30s.
+            // Only fires outside the crisis band (≥ 80 % fill triggers proper alerts).
+            if fill_pct < 80.0
+                && last_ambient.elapsed().as_secs() >= AMBIENT_INTERVAL_SECS
+            {
+                last_ambient = std::time::Instant::now();
+                let guard = snapshot_writer.read().unwrap_or_else(|p| p.into_inner());
+                let snap = &*guard;
+
+                let daily_cost = snap
+                    .budget_status
+                    .as_ref()
+                    .and_then(|v| v.get("daily_spent"))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                let cache_hit_rate = snap
+                    .cache_efficiency
+                    .as_ref()
+                    .and_then(|v| v.get("cache_hit_rate"))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                let predicted_turns = snap
+                    .context_pressure
+                    .as_ref()
+                    .and_then(|v| v.get("predicted_turns_remaining"))
+                    .and_then(Value::as_i64);
+                let should_compact = snap
+                    .suggest_compact
+                    .as_ref()
+                    .and_then(|v| v.get("should_compact"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                // Lightweight health proxy (no full MetricContext needed here).
+                let health_proxy = (cache_hit_rate * 35.0
+                    + (100.0 - fill_pct).max(0.0) * 0.35
+                    + (100.0 - snap
+                        .optimization_suggestions
+                        .as_ref()
+                        .and_then(|v| v.get("waste_score"))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0))
+                        * 0.30)
+                    .clamp(0.0, 100.0);
+
+                let _ = alert_tx.try_send(Alert {
+                    payload: json!({
+                        "method": "notifications/scopeon/status",
+                        "params": {
+                            "type": "ambient_status",
+                            "fill_pct": fill_pct,
+                            "predicted_turns_remaining": predicted_turns,
+                            "daily_cost_usd": daily_cost,
+                            "cache_hit_rate_pct": cache_hit_rate,
+                            "should_compact": should_compact,
+                            "health_score_proxy": (health_proxy * 10.0).round() / 10.0,
+                        }
+                    }),
+                });
             }
         }
     });
@@ -1150,7 +1679,13 @@ pub async fn run_mcp_server(db: Arc<Mutex<Database>>) -> Result<()> {
             alert = alert_rx.recv() => {
                 if let Some(alert) = alert {
                     // JSON-RPC notification: no "id" field (§4 of spec)
-                    let notif = serde_json::to_string(&alert.payload).unwrap_or_default();
+                    let notif = match serde_json::to_string(&alert.payload) {
+                        Ok(notif) => notif,
+                        Err(e) => {
+                            tracing::warn!("Failed to serialize push notification: {}", e);
+                            continue;
+                        },
+                    };
                     debug!("→ [push] {}", notif);
                     {
                         let mut w = stdout.lock().await;
@@ -1211,7 +1746,7 @@ pub async fn run_mcp_server(db: Arc<Mutex<Database>>) -> Result<()> {
         };
 
         let id = request.id.clone().unwrap_or(Value::Null);
-        let response = dispatch(id, request, &db, &snapshot);
+        let response = dispatch(id, request, &db, &snapshot, &config);
         send_response(&stdout, &response).await?;
     }
 
@@ -1223,6 +1758,7 @@ fn dispatch(
     request: JsonRpcRequest,
     db: &Arc<Mutex<Database>>,
     snapshot: &Arc<RwLock<MetricSnapshot>>,
+    config: &UserConfig,
 ) -> JsonRpcResponse {
     // Snapshot read guard — used for zero-cost tool calls.
     // If the RwLock is somehow poisoned (extremely unlikely), fall back to live queries.
@@ -1258,7 +1794,7 @@ fn dispatch(
                 "get_budget_status" => snap_or_live(
                     snap.as_ref().and_then(|s| s.budget_status.clone()),
                     db,
-                    |db| live_query(db, handle_get_budget_status),
+                    |db| live_query(db, |d| handle_get_budget_status(d, config)),
                 ),
                 "get_optimization_suggestions" => snap_or_live(
                     snap.as_ref()
@@ -1266,6 +1802,44 @@ fn dispatch(
                     db,
                     |db| live_query(db, handle_get_optimization_suggestions),
                 ),
+                "get_provider_capabilities" => {
+                    let sid = args.get("session_id").and_then(Value::as_str);
+                    if sid.is_none() {
+                        snap_or_live(
+                            snap.as_ref().and_then(|s| s.provider_capabilities.clone()),
+                            db,
+                            |db| live_query(db, |d| handle_get_provider_capabilities(d, None)),
+                        )
+                    } else {
+                        live_query(db, |d| handle_get_provider_capabilities(d, sid))
+                    }
+                },
+                "get_interaction_history" => {
+                    let sid = args.get("session_id").and_then(Value::as_str);
+                    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
+                    if sid.is_none() && limit == 100 {
+                        snap_or_live(
+                            snap.as_ref().and_then(|s| s.interaction_history.clone()),
+                            db,
+                            |db| live_query(db, |d| handle_get_interaction_history(d, None, 100)),
+                        )
+                    } else {
+                        live_query(db, |d| handle_get_interaction_history(d, sid, limit))
+                    }
+                },
+                "get_task_history" => {
+                    let sid = args.get("session_id").and_then(Value::as_str);
+                    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(25) as usize;
+                    if sid.is_none() && limit == 25 {
+                        snap_or_live(
+                            snap.as_ref().and_then(|s| s.task_history.clone()),
+                            db,
+                            |db| live_query(db, |d| handle_get_task_history(d, None, 25)),
+                        )
+                    } else {
+                        live_query(db, |d| handle_get_task_history(d, sid, limit))
+                    }
+                },
                 "suggest_compact" => snap_or_live(
                     snap.as_ref().and_then(|s| s.suggest_compact.clone()),
                     db,
@@ -1407,10 +1981,16 @@ fn dispatch(
                 other => return JsonRpcResponse::err(id, -32601, format!("Unknown tool: {other}")),
             };
 
+            let rendered_result = match serde_json::to_string_pretty(&result) {
+                Ok(text) => text,
+                Err(e) => {
+                    json!({"error": format!("Failed to serialize tool result: {}", e)}).to_string()
+                },
+            };
             JsonRpcResponse::ok(
                 id,
                 json!({
-                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default() }]
+                    "content": [{ "type": "text", "text": rendered_result }]
                 }),
             )
         },
