@@ -277,7 +277,7 @@ fn build_narrative_messages(app: &App) -> Vec<String> {
     }
 
     // Sort by severity descending (highest severity first, stable).
-    messages.sort_by(|a, b| b.0.cmp(&a.0));
+    messages.sort_by_key(|b| std::cmp::Reverse(b.0));
 
     // Pin the highest-severity message. If there are multiple messages at the same
     // top severity, rotate among them. Lower-severity messages only show when no

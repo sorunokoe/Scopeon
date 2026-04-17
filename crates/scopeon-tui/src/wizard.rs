@@ -66,11 +66,10 @@ pub fn run_wizard_tui(providers: &[(String, bool, String)]) -> Result<()> {
             if event::poll(Duration::from_millis(50))? {
                 if let Event::Key(key) = event::read()? {
                     match key.code {
-                        KeyCode::Enter | KeyCode::Char(' ') => {
-                            // Ignore if the page hasn't been on screen long enough.
-                            if page_shown_at.elapsed() >= PAGE_HOLD {
-                                break;
-                            }
+                        KeyCode::Enter | KeyCode::Char(' ')
+                            if page_shown_at.elapsed() >= PAGE_HOLD =>
+                        {
+                            break;
                         },
                         KeyCode::Char('q') | KeyCode::Esc => {
                             wizard_cleanup()?;

@@ -895,11 +895,9 @@ impl App {
                         KeyCode::Up | KeyCode::Char('k') => self.select_session_delta(-1),
                         KeyCode::Char('g') => self.select_session_abs(0),
                         KeyCode::Char('G') => self.select_session_abs(usize::MAX),
-                        KeyCode::Enter => {
-                            if !self.sessions_list.is_empty() {
-                                self.session_detail_mode = true;
-                                self.turn_scroll_detail = 0;
-                            }
+                        KeyCode::Enter if !self.sessions_list.is_empty() => {
+                            self.session_detail_mode = true;
+                            self.turn_scroll_detail = 0;
                         },
                         KeyCode::Char('/') => {
                             self.sessions_filter_active = true;
