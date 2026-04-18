@@ -79,6 +79,8 @@
 
 ## Screenshots
 
+![Scopeon Demo](scopeon-demo.gif)
+
 **Sessions** — full session list with per-turn cost, cache %, MCP call count
 
 ![Sessions](assets/1-sessions.png)
