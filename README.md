@@ -14,7 +14,7 @@
 
 [![CI](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml/badge.svg)](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml)
 [![GitHub release](https://img.shields.io/github/v/release/sorunokoe/Scopeon?label=release)](https://github.com/sorunokoe/Scopeon/releases)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](docs/licenses/LICENSE-MIT)
 [![MSRV: 1.88](https://img.shields.io/badge/MSRV-1.88-orange)](https://blog.rust-lang.org/2025/05/15/Rust-1.88.0.html)
 
 [**Install**](#installation) · [**Quick Start**](#quick-start) · [**Docs**](docs/) · [**Contributing**](#contributing)
@@ -79,7 +79,7 @@
 
 ## Screenshots
 
-![Scopeon Demo](scopeon-demo.gif)
+![Scopeon Demo](assets/scopeon-demo.gif)
 
 **Sessions** — full session list with per-turn cost, cache %, MCP call count
 
@@ -197,7 +197,7 @@ scopeon doctor                 # health diagnostics
 | OpenTelemetry integration | [docs/opentelemetry.md](docs/opentelemetry.md) |
 | Supported providers | [docs/providers.md](docs/providers.md) |
 | Configuration reference | [docs/configuration.md](docs/configuration.md) |
-| Architecture & codebase map | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Architecture & codebase map | [docs/architecture.md](docs/architecture.md) |
 
 ---
 
@@ -230,8 +230,8 @@ make          # fmt-check + clippy + test (same as CI)
 make install  # install to ~/.cargo/bin
 ```
 
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev workflow, PR process, adding providers
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — codebase map: crate roles, data flow, schema
+- **[docs/contributing.md](docs/contributing.md)** — dev workflow, PR process, adding providers
+- **[docs/architecture.md](docs/architecture.md)** — codebase map: crate roles, data flow, schema
 
 Every PR must pass the full CI suite (fmt · clippy · tests on Linux/macOS/Windows · MSRV · docs).
 
@@ -239,13 +239,13 @@ Every PR must pass the full CI suite (fmt · clippy · tests on Linux/macOS/Wind
 
 ## Changelog
 
-See **[CHANGELOG.md](CHANGELOG.md)** for the full version history.
+See **[docs/changelog.md](docs/changelog.md)** for the full version history.
 
 ---
 
 ## License
 
-Dual-licensed under **[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE)** — use it however you like.
+Dual-licensed under **[MIT](docs/licenses/LICENSE-MIT) OR [Apache-2.0](docs/licenses/LICENSE-APACHE)** — use it however you like.
 
 ---
 

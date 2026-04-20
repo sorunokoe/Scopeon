@@ -12,4 +12,4 @@
 | [providers.md](providers.md) | Supported providers, log paths, adding a new provider |
 | [configuration.md](configuration.md) | Full config.toml reference, environment variables, repricing |
 
-For contributor docs see [CONTRIBUTING.md](../CONTRIBUTING.md) and [ARCHITECTURE.md](../ARCHITECTURE.md).
+For contributor docs see [contributing.md](contributing.md) and [architecture.md](architecture.md).

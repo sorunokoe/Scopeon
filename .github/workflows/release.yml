@@ -108,6 +108,8 @@ jobs:
           TARGET="${{ matrix.target }}"
           ARCHIVE="scopeon-${VERSION}-${TARGET}.tar.gz"
           cp "target/$TARGET/release/scopeon" scopeon
+          cp docs/licenses/LICENSE-MIT LICENSE-MIT
+          cp docs/licenses/LICENSE-APACHE LICENSE-APACHE
           tar czf "$ARCHIVE" scopeon README.md LICENSE-MIT LICENSE-APACHE
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
@@ -119,6 +121,8 @@ jobs:
           $TARGET = "${{ matrix.target }}"
           $ARCHIVE = "scopeon-${VERSION}-${TARGET}.zip"
           Copy-Item "target/$TARGET/release/scopeon.exe" scopeon.exe
+          Copy-Item "docs/licenses/LICENSE-MIT" LICENSE-MIT
+          Copy-Item "docs/licenses/LICENSE-APACHE" LICENSE-APACHE
           Compress-Archive -Path scopeon.exe, README.md, LICENSE-MIT, LICENSE-APACHE -DestinationPath $ARCHIVE
           "ARCHIVE=$ARCHIVE" | Out-File -FilePath $env:GITHUB_ENV -Append
 

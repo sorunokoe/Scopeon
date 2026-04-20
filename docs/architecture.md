@@ -189,7 +189,7 @@ formats (for example Copilot CLI, Aider, Gemini CLI) implement their own `scan()
 Providers live in `crates/scopeon-collector/src/providers/`. To add a new provider:
 1. Create `providers/myprovider.rs` implementing `Provider`.
 2. Register it in `providers/mod.rs`.
-3. Follow the complete guide in `CONTRIBUTING.md`.
+3. Follow the complete guide in `contributing.md`.
 
 ### File watcher
 

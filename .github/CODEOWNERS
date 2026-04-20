@@ -17,7 +17,7 @@ crates/scopeon-core/src/models.rs       @scopeon/maintainers
 crates/scopeon-core/src/cost.rs         @scopeon/maintainers
 
 # ── Security-sensitive files ─────────────────────────────────────────────────
-SECURITY.md                             @scopeon/maintainers
+.github/SECURITY.md                     @scopeon/maintainers
 .github/workflows/release.yml           @scopeon/maintainers
 install.sh                              @scopeon/maintainers
 packaging/                              @scopeon/maintainers

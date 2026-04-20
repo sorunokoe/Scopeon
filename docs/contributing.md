@@ -62,7 +62,7 @@ make docs     # build and open rustdoc
 make check    # full pre-push check (fmt + clippy + test + audit)
 ```
 
-See ARCHITECTURE.md for a full codebase map (data flow, schema, key files).
+See architecture.md for a full codebase map (data flow, schema, key files).
 
 ### Run from source
 
@@ -312,7 +312,7 @@ cargo test -- --nocapture               # show println! output
    ```bash
    make check   # fmt + clippy + tests + audit
    ```
-4. **Add a CHANGELOG entry** under `[Unreleased]` in `CHANGELOG.md`.
+4. **Add a CHANGELOG entry** under `[Unreleased]` in `changelog.md`.
 5. **Open a PR** with a clear description of what changed and why.
 
 The CI pipeline (defined in `.github/workflows/ci.yml`) runs automatically on every PR:
@@ -337,7 +337,7 @@ The CI pipeline (defined in `.github/workflows/ci.yml`) runs automatically on ev
 feat: add support for Windsurf provider
 fix: prevent negative token offset wrapping to u64::MAX
 perf: use dedicated read-only connection in snapshot task
-docs: add webhook escalation guide to CONTRIBUTING.md
+docs: add webhook escalation guide to docs/contributing.md
 chore(deps): update tokio to 1.44
 ```
 

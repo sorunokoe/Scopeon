@@ -14,7 +14,7 @@ Scopeon discovers log files automatically — no configuration needed for standa
 
 ## Adding a new provider
 
-It usually takes one provider file plus a registration change. See [CONTRIBUTING.md](../CONTRIBUTING.md#adding-a-new-provider) for the full walkthrough.
+It usually takes one provider file plus a registration change. See [contributing.md](contributing.md#adding-a-new-provider) for the full walkthrough.
 
 In short:
 
