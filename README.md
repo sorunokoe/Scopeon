@@ -101,11 +101,11 @@
 
 ## Installation
 
-### Fastest: `cargo binstall` (pre-built binary)
+### Fastest: `cargo binstall` (pre-built binary, no compilation)
 
 ```bash
 cargo install cargo-binstall   # one-time
-cargo binstall scopeon
+cargo binstall --git https://github.com/sorunokoe/Scopeon scopeon
 ```
 
 ### curl one-liner (macOS & Linux)
@@ -121,6 +121,9 @@ cargo install --git https://github.com/sorunokoe/Scopeon
 ```
 
 **Requirements:** Rust 1.88+ · macOS 12+ or Linux (glibc 2.31+) · Windows 10+
+
+> **Note:** `cargo install scopeon` and `cargo binstall scopeon` (without `--git`) require
+> the crate to be published on crates.io, which is coming soon.
 
 ### Pre-built binaries
 
