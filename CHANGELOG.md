@@ -31,6 +31,27 @@ Scopeon follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.7.1] — 2026-04-20
+
+### Added
+
+- **GitHub Copilot CLI MCP integration** — `scopeon init-copilot` writes Scopeon as an MCP
+  server into `~/.copilot/mcp-config.json` atomically (backup → tmp → rename).
+  Preserves all existing MCP servers; creates the file if absent.
+  Copilot can then call `get_token_usage`, `get_session_summary`, `get_cache_efficiency`,
+  `get_history`, and `compare_sessions` without any token cost per JSON-RPC §4.
+- **`scopeon onboard` auto-detection** — when Copilot CLI is detected the onboarding wizard
+  now prompts to configure the MCP server automatically (same flow as Claude Code).
+- Two unit tests for `cmd_init_copilot`: create-from-scratch and preserve-existing-servers.
+
+### Fixed
+
+- Install instructions updated to use `--git` variants until the crate is published on
+  crates.io: `cargo binstall --git https://github.com/sorunokoe/Scopeon scopeon`
+  and `cargo install --git https://github.com/sorunokoe/Scopeon`.
+
+---
+
 ## [0.7.0] — 2026-04-17
 
 This release delivers OpenTelemetry integration documentation (S-8 Phase 1), the Copilot CLI
@@ -546,7 +567,8 @@ This release applies a **TRIZ-inspired v2 analysis** — 10 inventive solutions 
 
 ---
 
-[Unreleased]: https://github.com/sorunokoe/Scopeon/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/sorunokoe/Scopeon/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/sorunokoe/Scopeon/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sorunokoe/Scopeon/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/sorunokoe/Scopeon/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/sorunokoe/Scopeon/compare/v0.4.0...v0.5.0

@@ -1,15 +1,50 @@
 # MCP Integration
 
-After running `scopeon init`, Scopeon registers itself as an MCP server in Claude Code.
+Scopeon can register itself as an MCP server in both Claude Code and GitHub Copilot CLI.
 The agent can then call Scopeon tools directly from its own context —
 **without using any token budget for polling**.
 
-## Setup
+## Setup — Claude Code
 
 ```bash
 scopeon init
 # → writes MCP server config to ~/.claude/settings.json
 ```
+
+## Setup — GitHub Copilot CLI
+
+```bash
+scopeon init-copilot
+# → writes MCP server config to ~/.copilot/mcp-config.json
+```
+
+Or let the onboarding wizard handle both automatically:
+
+```bash
+scopeon onboard
+# → detects Claude Code and Copilot CLI, offers to configure each
+```
+
+`init-copilot` writes the following entry to `~/.copilot/mcp-config.json`, preserving
+any existing MCP servers. The file is created with an empty `mcpServers` object if absent.
+The write is atomic (backup → tmp → rename) so the file is never left in a partial state.
+
+```json
+{
+  "mcpServers": {
+    "scopeon": {
+      "type": "local",
+      "command": "/path/to/scopeon",
+      "args": ["mcp"],
+      "env": {},
+      "source": "user",
+      "sourcePath": "/Users/you/.copilot/mcp-config.json"
+    }
+  }
+}
+```
+
+Restart Copilot CLI after running `init-copilot` for the change to take effect.
 
 ## Available tools
 
