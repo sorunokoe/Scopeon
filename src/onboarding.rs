@@ -184,6 +184,26 @@ pub fn cmd_onboard() -> Result<()> {
         writeln!(out)?;
     }
 
+    // ── GitHub Copilot CLI MCP configuration ─────────────────────────────────
+    let has_copilot = detected.iter().any(|(n, _, _)| n == "GitHub Copilot CLI");
+    if has_copilot {
+        write!(
+            out,
+            "Configure Scopeon as an MCP server in GitHub Copilot CLI? [Y/n] "
+        )?;
+        out.flush()?;
+        let answer = read_line()?;
+        if answer.trim().is_empty() || answer.trim().eq_ignore_ascii_case("y") {
+            crate::cmd_init_copilot()?;
+        } else {
+            writeln!(
+                out,
+                "  Skipped. Run `scopeon init-copilot` later to configure."
+            )?;
+        }
+        writeln!(out)?;
+    }
+
     // ── Shell integration ─────────────────────────────────────────────────────
     write!(out, "Add Scopeon status to your shell prompt? [Y/n] ")?;
     out.flush()?;
