@@ -68,6 +68,7 @@ pub struct ParseResult {
     pub tool_calls: Vec<ToolCall>,
     pub interaction_events: Vec<InteractionEvent>,
     pub new_offset: u64,
+    pub skipped_lines: usize,
 }
 
 /// Parse new lines from a JSONL file starting at `from_offset`.
@@ -87,6 +88,7 @@ pub fn parse_file_incremental(
     let mut interaction_events: Vec<InteractionEvent> = Vec::new();
     let mut turn_index: i64 = start_turn_index;
     let mut current_offset = from_offset;
+    let mut skipped_lines: usize = 0;
     // IS-A: track msg_id → index in `turns` to deduplicate streaming records
     // (Claude Code emits 2-4 records per assistant turn with increasing output_tokens)
     let mut seen_msg_ids: HashMap<String, usize> = HashMap::new();
@@ -318,6 +320,7 @@ pub fn parse_file_incremental(
             },
             Err(e) => {
                 debug!("Skipping unparseable line in {:?}: {}", file_path, e);
+                skipped_lines += 1;
             },
         }
 
@@ -330,6 +333,7 @@ pub fn parse_file_incremental(
         tool_calls,
         interaction_events,
         new_offset: current_offset,
+        skipped_lines,
     })
 }
 

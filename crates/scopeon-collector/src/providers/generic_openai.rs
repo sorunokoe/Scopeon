@@ -122,7 +122,7 @@ fn scan_openai_file(file: &std::path::Path, db: &Database) -> Result<usize> {
     let mut last_ts = 0i64;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or(0);
 
     for line in reader.lines() {

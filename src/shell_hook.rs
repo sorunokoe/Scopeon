@@ -187,6 +187,26 @@ fn ansi_ctx(pct: f64) -> (&'static str, &'static str) {
 
 // ── Shell detection ────────────────────────────────────────────────────────────
 
+/// Wrap a filesystem path in POSIX single-quotes so it is safe to embed in
+/// generated shell code for sh, bash, and zsh regardless of spaces, `$`,
+/// backticks, or other metacharacters.  The only character that cannot appear
+/// inside single-quotes is the single-quote itself; we escape it as `'\''`.
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Wrap a filesystem path in fish double-quotes.
+/// Fish single-quotes do not support backslash escapes, so we use double
+/// quotes and escape the three characters that are special inside them:
+/// `\` (escape char), `"` (quote terminator), and `$` (variable expansion).
+fn shell_quote_fish(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$");
+    format!("\"{}\"", escaped)
+}
+
 fn detect_shell() -> String {
     std::env::var("SHELL")
         .ok()
@@ -212,13 +232,14 @@ fn bash_hook(exe: &str) -> String {
     // TRIZ D1: read pre-written status file (<1ms) instead of forking scopeon each prompt.
     // Falls back to scopeon shell-status on first run (file not yet written by TUI).
     let status_path = status_file_path();
-    let status_path_str = status_path.to_string_lossy();
+    let exe_q = shell_single_quote(exe);
+    let status_q = shell_single_quote(&status_path.to_string_lossy());
     format!(
         r#"# Scopeon ambient status — refresh $SCOPEON_STATUS on every prompt.
 # Added to ~/.bashrc via:  eval "$(scopeon shell-hook)"
 # Uses pre-written status file for zero-fork, zero-latency prompt updates.
 _scopeon_refresh() {{
-  SCOPEON_STATUS="$(cat "{status_path_str}" 2>/dev/null || "{exe}" shell-status 2>/dev/null || true)"
+  SCOPEON_STATUS="$(cat {status_q} 2>/dev/null || {exe_q} shell-status 2>/dev/null || true)"
 }}
 if [[ -n "$PROMPT_COMMAND" ]]; then
   PROMPT_COMMAND="_scopeon_refresh; $PROMPT_COMMAND"
@@ -233,14 +254,15 @@ fi
 
 fn zsh_hook(exe: &str) -> String {
     let status_path = status_file_path();
-    let status_path_str = status_path.to_string_lossy();
+    let exe_q = shell_single_quote(exe);
+    let status_q = shell_single_quote(&status_path.to_string_lossy());
     format!(
         r#"# Scopeon ambient status — refresh $SCOPEON_STATUS on every prompt.
 # Added to ~/.zshrc via:  eval "$(scopeon shell-hook)"
 # Uses pre-written status file for zero-fork, zero-latency prompt updates.
 autoload -Uz add-zsh-hook
 _scopeon_refresh() {{
-  SCOPEON_STATUS="$(cat "{status_path_str}" 2>/dev/null || "{exe}" shell-status 2>/dev/null || true)"
+  SCOPEON_STATUS="$(cat {status_q} 2>/dev/null || {exe_q} shell-status 2>/dev/null || true)"
 }}
 add-zsh-hook precmd _scopeon_refresh
 # To show in right prompt:
@@ -251,13 +273,14 @@ add-zsh-hook precmd _scopeon_refresh
 
 fn fish_hook(exe: &str) -> String {
     let status_path = status_file_path();
-    let status_path_str = status_path.to_string_lossy();
+    let exe_q = shell_quote_fish(exe);
+    let status_q = shell_quote_fish(&status_path.to_string_lossy());
     format!(
         r#"# Scopeon ambient status — refresh $SCOPEON_STATUS on every prompt.
 # Source in config.fish via:  {exe} shell-hook --shell fish | source
 # Uses pre-written status file for zero-fork, zero-latency prompt updates.
 function _scopeon_refresh --on-event fish_prompt
-  set -gx SCOPEON_STATUS (cat "{status_path_str}" 2>/dev/null; or {exe} shell-status 2>/dev/null; or echo "")
+  set -gx SCOPEON_STATUS (cat {status_q} 2>/dev/null; or {exe_q} shell-status 2>/dev/null; or echo "")
 end
 # To show in prompt, add to fish_prompt:
 #   echo -n $SCOPEON_STATUS" "

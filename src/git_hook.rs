@@ -26,16 +26,20 @@ use anyhow::{bail, Context, Result};
 const HOOK_MARKER: &str = "# scopeon-git-hook";
 
 const HOOK_BODY: &str = r#"#!/bin/sh
+set -eu
 # scopeon-git-hook — appends AI-Cost trailer to every commit message.
 # Installed by `scopeon git-hook install`. Remove with `scopeon git-hook uninstall`.
 if command -v scopeon >/dev/null 2>&1; then
-    trailer=$(scopeon git-trailer 2>/dev/null)
-    if [ -n "$trailer" ]; then
-        # Append a blank line then the trailer if not already present.
-        if ! grep -qF 'AI-Cost:' "$1"; then
-            printf '\n%s\n' "$trailer" >> "$1"
-        fi
-    fi
+    trailer=$(scopeon git-trailer 2>/dev/null || true)
+    # Validate format: must begin with "AI-Cost:" — rejects empty output and
+    # any accidental multi-line or injected content from a compromised binary.
+    case "$trailer" in
+        AI-Cost:*)
+            if ! grep -qF 'AI-Cost:' "$1"; then
+                printf '\n%s\n' "$trailer" >> "$1"
+            fi
+            ;;
+    esac
 fi
 "#;
 

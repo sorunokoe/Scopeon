@@ -31,6 +31,53 @@ Scopeon follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.0] — 2026-04-22
+
+### Security
+
+- Shell hook code generation now single-quote-escapes the binary path and status file path,
+  preventing injection via paths that contain `$`, backticks, or spaces.
+- Git hook now runs under `set -eu` and validates the `AI-Cost:` trailer format with a `case`
+  pattern before appending, preventing malformed trailers from entering commit history.
+
+### Performance
+
+- Database writes are now batched: turns, tool calls, and interaction events are inserted in a
+  single transaction per file instead of one implicit transaction per row — 100–1000× faster
+  for large JSONL files.
+- File offset is committed atomically with the parsed data in the same transaction (crash-safe).
+- TUI refresh now uses a read-only SQLite connection (WAL concurrent reader), eliminating lock
+  contention between the backfill watcher and the live dashboard.
+- Live dashboard aggregation uses `get_session_aggregates` instead of loading all turns into
+  memory, reducing RAM usage on long sessions.
+
+### Fixed
+
+- Providers tab no longer mixes Claude Code and Copilot CLI sessions: each provider now shows
+  its own session totals instead of global totals under Claude Code and zeros elsewhere.
+- `CLAUDE_CONFIG_DIR` environment variable is now respected by `scopeon init` and provider
+  auto-detection (was silently ignored).
+- `scopeon onboard` now has tests covering Claude MCP config injection.
+- Cost aggregation in budget status skips NaN, Inf, and negative cost rows that could corrupt
+  totals.
+- Context pressure "turns remaining" prediction is clamped to 10 000 (was unbounded, producing
+  misleading very-large numbers in low-activity sessions).
+- `list_interaction_events_for_session` now queries in ascending order directly, removing an
+  unnecessary allocation-and-reverse on every TUI refresh.
+- Watcher emits a `warn!` log when lines are dropped during JSONL parse, replacing silent data
+  loss with an observable signal.
+- NaN panic in `get_session_anomalies` sort (from prior session).
+- Silent u128→i64 truncation in file mtime timestamps (from prior session).
+- Fish shell hook had an unquoted executable path (from prior session).
+
+### Changed
+
+- Repository housekeeping: `ARCHITECTURE.md`, `CHANGELOG.md`, `CONTRIBUTING.md` moved to
+  `docs/`; license files moved to `docs/licenses/`; `CODE_OF_CONDUCT.md` and `SECURITY.md`
+  moved to `.github/`. All README and cross-doc links updated accordingly.
+
+---
+
 ## [0.7.1] — 2026-04-20
 
 ### Added
@@ -567,7 +614,8 @@ This release applies a **TRIZ-inspired v2 analysis** — 10 inventive solutions 
 
 ---
 
-[Unreleased]: https://github.com/sorunokoe/Scopeon/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/sorunokoe/Scopeon/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/sorunokoe/Scopeon/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/sorunokoe/Scopeon/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sorunokoe/Scopeon/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/sorunokoe/Scopeon/compare/v0.5.0...v0.6.0
