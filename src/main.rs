@@ -817,6 +817,7 @@ fn cmd_tag(db: &scopeon_core::Database, action: TagAction) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::fs;
 
     #[test]
@@ -884,28 +885,16 @@ mod tests {
     #[test]
     fn test_cmd_init_creates_claude_config() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let exe_str = std::env::current_exe()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        // SAFETY: tests using CLAUDE_CONFIG_DIR must not run in parallel.
+        // The crate-level test suite is single-threaded by default for env-var tests.
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", tmp.path()) };
 
-        // Simulate what cmd_init() writes into settings.json.
-        let settings = serde_json::json!({
-            "mcpServers": {
-                "scopeon": {
-                    "command": exe_str,
-                    "args": ["mcp"],
-                    "env": {}
-                }
-            }
-        });
+        let result = cmd_init();
+
+        unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
+        result.expect("cmd_init should succeed");
+
         let settings_path = tmp.path().join("settings.json");
-        fs::write(
-            &settings_path,
-            serde_json::to_string_pretty(&settings).unwrap(),
-        )
-        .unwrap();
-
         let raw = fs::read_to_string(&settings_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let entry = &parsed["mcpServers"]["scopeon"];
@@ -916,8 +905,9 @@ mod tests {
 
     #[test]
     fn test_cmd_init_preserves_existing_servers() {
-        // Verify that injecting scopeon does not clobber other MCP servers.
-        let mut settings = serde_json::json!({
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Pre-populate settings.json with an existing server and a non-mcpServers key.
+        let existing = serde_json::json!({
             "alwaysThinkingEnabled": true,
             "mcpServers": {
                 "other-server": {
@@ -927,15 +917,24 @@ mod tests {
                 }
             }
         });
-        let exe_str = "/usr/local/bin/scopeon";
-        settings["mcpServers"]["scopeon"] = serde_json::json!({
-            "command": exe_str,
-            "args": ["mcp"],
-            "env": {}
-        });
+        fs::write(
+            tmp.path().join("settings.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
 
-        assert!(settings["mcpServers"]["other-server"].is_object());
-        assert_eq!(settings["mcpServers"]["scopeon"]["args"][0], "mcp");
-        assert_eq!(settings["alwaysThinkingEnabled"], true);
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", tmp.path()) };
+        let result = cmd_init();
+        unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
+        result.expect("cmd_init should succeed");
+
+        let raw = fs::read_to_string(tmp.path().join("settings.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        // Pre-existing server must survive.
+        assert!(parsed["mcpServers"]["other-server"].is_object());
+        // Scopeon entry must be injected.
+        assert_eq!(parsed["mcpServers"]["scopeon"]["args"][0], "mcp");
+        // Non-mcpServers key must be preserved.
+        assert_eq!(parsed["alwaysThinkingEnabled"], true);
     }
 }

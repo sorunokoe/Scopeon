@@ -1490,6 +1490,9 @@ impl Database {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<InteractionEvent>> {
+        // Return the most-recent `limit` events in ascending (chronological) order.
+        // The subquery picks the newest N rows (DESC + LIMIT), then the outer query
+        // re-sorts them ASC so callers always receive events in time order.
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, turn_id, task_run_id, correlation_id, parent_id, provider,
                     timestamp, kind, phase, name, display_name, mcp_server, mcp_tool, hook_type,
@@ -1497,10 +1500,19 @@ impl Database {
                     output_size_chars, prompt_size_chars, summary_size_chars, total_tokens,
                     total_tool_calls, duration_ms, estimated_input_tokens, estimated_output_tokens,
                     estimated_cost_usd, confidence
-              FROM interaction_events
-              WHERE session_id = ?1
-              ORDER BY timestamp ASC
-              LIMIT ?2",
+             FROM (
+               SELECT id, session_id, turn_id, task_run_id, correlation_id, parent_id, provider,
+                      timestamp, kind, phase, name, display_name, mcp_server, mcp_tool, hook_type,
+                      agent_type, execution_mode, model, status, success, input_size_chars,
+                      output_size_chars, prompt_size_chars, summary_size_chars, total_tokens,
+                      total_tool_calls, duration_ms, estimated_input_tokens, estimated_output_tokens,
+                      estimated_cost_usd, confidence
+               FROM interaction_events
+               WHERE session_id = ?1
+               ORDER BY timestamp DESC
+               LIMIT ?2
+             )
+             ORDER BY timestamp ASC",
         )?;
         let rows = stmt.query_map(params![session_id, limit as i64], row_to_interaction_event)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()

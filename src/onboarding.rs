@@ -76,20 +76,16 @@ fn detect_providers() -> Vec<(String, bool, String)> {
         |sub: &str| -> bool { home.as_ref().map(|h| h.join(sub).exists()).unwrap_or(false) };
 
     // Respect CLAUDE_CONFIG_DIR override (same priority as ClaudeCodeProvider::new).
-    let claude_detected = std::env::var("CLAUDE_CONFIG_DIR")
+    let claude_base = std::env::var("CLAUDE_CONFIG_DIR")
         .ok()
         .map(std::path::PathBuf::from)
         .or_else(|| home.as_ref().map(|h| h.join(".claude")))
-        .unwrap_or_else(|| std::path::PathBuf::from("/nonexistent"))
-        .join("projects")
-        .exists();
+        .unwrap_or_else(|| std::path::PathBuf::from("/nonexistent"));
+    let claude_detected = claude_base.join("projects").exists();
+    let claude_hint = format!("{}/projects/", claude_base.display());
 
     vec![
-        (
-            "Claude Code".to_string(),
-            claude_detected,
-            "~/.claude/projects/".to_string(),
-        ),
+        ("Claude Code".to_string(), claude_detected, claude_hint),
         (
             "GitHub Copilot CLI".to_string(),
             check(".copilot/session-state"),

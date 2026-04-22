@@ -1443,9 +1443,9 @@ fn build_provider_status(
     let (claude_sessions, claude_turns) = db_stats("claude-code");
     let (copilot_sessions, copilot_turns) = db_stats("copilot-cli");
     let (aider_sessions, aider_turns) = db_stats("aider");
-    let (gemini_sessions, gemini_turns) = db_stats("gemini");
+    let (gemini_sessions, gemini_turns) = db_stats("gemini-cli");
     let (ollama_sessions, ollama_turns) = db_stats("ollama");
-    let (codex_sessions, codex_turns) = db_stats("generic");
+    let (codex_sessions, codex_turns) = db_stats("generic-openai");
 
     vec![
         ProviderStatus {
