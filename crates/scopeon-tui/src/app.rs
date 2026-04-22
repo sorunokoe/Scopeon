@@ -360,7 +360,8 @@ impl App {
 
         // ── Global stats ─────────────────────────────────────────────────────
         self.global_stats = db.get_global_stats().ok();
-        self.providers = build_provider_status(&self.global_stats);
+        let provider_db_stats = db.get_stats_by_provider().unwrap_or_default();
+        self.providers = build_provider_status(&provider_db_stats);
         self.project_stats = db.get_project_stats().unwrap_or_default();
         self.session_anomalies = db.get_session_anomalies().unwrap_or_default();
         self.global_tool_stats = db.get_tool_stats(None).unwrap_or_default();
@@ -1400,14 +1401,24 @@ fn detect_copilot_activity() -> bool {
     false
 }
 
-fn build_provider_status(global: &Option<GlobalStats>) -> Vec<ProviderStatus> {
+fn build_provider_status(
+    provider_db_stats: &std::collections::HashMap<String, (i64, i64)>,
+) -> Vec<ProviderStatus> {
     let home = dirs::home_dir();
 
     let check =
         |sub: &str| -> bool { home.as_ref().map(|h| h.join(sub).exists()).unwrap_or(false) };
     let check_abs = |path: &str| -> bool { std::path::Path::new(path).exists() };
 
-    let claude_available = check(".claude/projects");
+    // Respect CLAUDE_CONFIG_DIR override (same priority as ClaudeCodeProvider::new).
+    let claude_available = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".claude")))
+        .unwrap_or_else(|| std::path::PathBuf::from("/nonexistent"))
+        .join("projects")
+        .exists();
+
     let ollama_available = check("Library/Application Support/Ollama/db.sqlite");
     let codex_available = check(".codex/sessions");
     let aider_available = check(".aider/analytics.jsonl");
@@ -1422,18 +1433,27 @@ fn build_provider_status(global: &Option<GlobalStats>) -> Vec<ProviderStatus> {
         check("Library/Application Support/Code/User/globalStorage/continue.continue")
             || check(".config/Code/User/globalStorage/continue.continue");
 
-    let (total_sessions, total_turns) = global
-        .as_ref()
-        .map(|g| (g.total_sessions as usize, g.total_turns as usize))
-        .unwrap_or((0, 0));
+    let db_stats = |id: &str| -> (usize, usize) {
+        provider_db_stats
+            .get(id)
+            .map(|&(s, t)| (s as usize, t as usize))
+            .unwrap_or((0, 0))
+    };
+
+    let (claude_sessions, claude_turns) = db_stats("claude-code");
+    let (copilot_sessions, copilot_turns) = db_stats("copilot-cli");
+    let (aider_sessions, aider_turns) = db_stats("aider");
+    let (gemini_sessions, gemini_turns) = db_stats("gemini");
+    let (ollama_sessions, ollama_turns) = db_stats("ollama");
+    let (codex_sessions, codex_turns) = db_stats("generic");
 
     vec![
         ProviderStatus {
             id: "claude-code".to_string(),
             name: "Claude Code".to_string(),
             is_active: claude_available,
-            session_count: if claude_available { total_sessions } else { 0 },
-            turn_count: if claude_available { total_turns } else { 0 },
+            session_count: claude_sessions,
+            turn_count: claude_turns,
             last_update: None,
             config_hint: "~/.claude/projects/  (auto-detected)".to_string(),
         },
@@ -1441,8 +1461,8 @@ fn build_provider_status(global: &Option<GlobalStats>) -> Vec<ProviderStatus> {
             id: "copilot-cli".to_string(),
             name: "GitHub Copilot CLI".to_string(),
             is_active: copilot_cli_available,
-            session_count: 0,
-            turn_count: 0,
+            session_count: copilot_sessions,
+            turn_count: copilot_turns,
             last_update: None,
             config_hint: if copilot_cli_available {
                 "~/.copilot/session-state/  (full JSONL data — context, turns, tools, compaction tokens)".to_string()
@@ -1454,8 +1474,8 @@ fn build_provider_status(global: &Option<GlobalStats>) -> Vec<ProviderStatus> {
             id: "aider".to_string(),
             name: "Aider".to_string(),
             is_active: aider_available,
-            session_count: 0,
-            turn_count: 0,
+            session_count: aider_sessions,
+            turn_count: aider_turns,
             last_update: None,
             config_hint: if aider_available {
                 "~/.aider/analytics.jsonl  (run aider with --analytics-log)".to_string()
@@ -1467,8 +1487,8 @@ fn build_provider_status(global: &Option<GlobalStats>) -> Vec<ProviderStatus> {
             id: "gemini".to_string(),
             name: "Gemini CLI".to_string(),
             is_active: gemini_available,
-            session_count: 0,
-            turn_count: 0,
+            session_count: gemini_sessions,
+            turn_count: gemini_turns,
             last_update: None,
             config_hint: if gemini_available {
                 "~/.gemini/tmp/*/session-*.jsonl  (auto-detected)".to_string()
@@ -1480,8 +1500,8 @@ fn build_provider_status(global: &Option<GlobalStats>) -> Vec<ProviderStatus> {
             id: "ollama".to_string(),
             name: "Ollama (local LLM)".to_string(),
             is_active: ollama_available,
-            session_count: 0,
-            turn_count: 0,
+            session_count: ollama_sessions,
+            turn_count: ollama_turns,
             last_update: None,
             config_hint: "~/Library/Application Support/Ollama/db.sqlite".to_string(),
         },
@@ -1489,8 +1509,8 @@ fn build_provider_status(global: &Option<GlobalStats>) -> Vec<ProviderStatus> {
             id: "generic".to_string(),
             name: "Generic OpenAI".to_string(),
             is_active: codex_available,
-            session_count: 0,
-            turn_count: 0,
+            session_count: codex_sessions,
+            turn_count: codex_turns,
             last_update: None,
             config_hint: "~/.codex/sessions/ or configure in ~/.scopeon/config.toml".to_string(),
         },
@@ -1833,6 +1853,15 @@ fn notify_desktop(title: &str, body: &str, urgent: bool) {
 }
 
 pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
+    // Open a read-only replica for the TUI refresh path.
+    // Under WAL mode, readers never block writers and vice versa, so the TUI
+    // can refresh without ever contending with the file-watcher write mutex.
+    let db_ro: Option<Database> = db
+        .lock()
+        .ok()
+        .and_then(|g| g.path().map(|p| p.to_owned()))
+        .and_then(|p| Database::open_readonly(&p).ok());
+
     enable_raw_mode()?;
 
     // Queue all terminal-setup commands into one write+flush so the terminal
@@ -1861,7 +1890,9 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
     let splash_start = Instant::now();
 
     app.refresh_in_progress = true;
-    if let Ok(db_guard) = db.try_lock() {
+    if let Some(ro) = &db_ro {
+        app.refresh(ro);
+    } else if let Ok(db_guard) = db.try_lock() {
         app.refresh(&db_guard);
     }
     // If try_lock fails the backfill holds the mutex; spinner stays visible
@@ -1910,7 +1941,9 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
 
         if app.last_refresh.elapsed() >= app.refresh_interval {
             app.refresh_in_progress = true;
-            if let Ok(db_guard) = db.try_lock() {
+            if let Some(ro) = &db_ro {
+                app.refresh(ro);
+            } else if let Ok(db_guard) = db.try_lock() {
                 app.refresh(&db_guard);
             }
             // If try_lock fails (backfill holds mutex), skip this tick.

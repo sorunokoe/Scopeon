@@ -953,19 +953,17 @@ fn build_ws_snapshot(db: &Database, config: &UserConfig) -> Value {
         rollups
             .iter()
             .fold((0.0f64, 0.0f64, 0.0f64), |(d, w, m), r| {
+                let cost = r.estimated_cost_usd;
+                // Skip rows with corrupt cost values to prevent NaN/Inf poisoning
+                // budget comparisons and alert thresholds.
+                if !cost.is_finite() || cost < 0.0 {
+                    return (d, w, m);
+                }
                 let date = chrono::NaiveDate::parse_from_str(&r.date, "%Y-%m-%d").unwrap_or(today);
                 (
-                    d + if date == today {
-                        r.estimated_cost_usd
-                    } else {
-                        0.0
-                    },
-                    w + if date >= week_start {
-                        r.estimated_cost_usd
-                    } else {
-                        0.0
-                    },
-                    m + r.estimated_cost_usd,
+                    d + if date == today { cost } else { 0.0 },
+                    w + if date >= week_start { cost } else { 0.0 },
+                    m + cost,
                 )
             });
 

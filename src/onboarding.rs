@@ -75,10 +75,19 @@ fn detect_providers() -> Vec<(String, bool, String)> {
     let check =
         |sub: &str| -> bool { home.as_ref().map(|h| h.join(sub).exists()).unwrap_or(false) };
 
+    // Respect CLAUDE_CONFIG_DIR override (same priority as ClaudeCodeProvider::new).
+    let claude_detected = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".claude")))
+        .unwrap_or_else(|| std::path::PathBuf::from("/nonexistent"))
+        .join("projects")
+        .exists();
+
     vec![
         (
             "Claude Code".to_string(),
-            check(".claude/projects"),
+            claude_detected,
             "~/.claude/projects/".to_string(),
         ),
         (

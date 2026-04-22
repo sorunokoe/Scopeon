@@ -624,8 +624,13 @@ async fn main() -> Result<()> {
 }
 
 pub fn cmd_init() -> Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("No home dir"))?;
-    let settings_path = home.join(".claude").join("settings.json");
+    // Respect CLAUDE_CONFIG_DIR override (same priority as ClaudeCodeProvider::new).
+    let claude_base = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".claude")))
+        .ok_or_else(|| anyhow::anyhow!("No home dir"))?;
+    let settings_path = claude_base.join("settings.json");
 
     // §2.5: Store the exe path as-reported by the OS (before resolving symlinks).
     // Resolving symlinks via canonicalize() bakes in the concrete binary path — after
@@ -676,7 +681,9 @@ pub fn cmd_init() -> Result<()> {
         settings_path.display()
     );
     println!("  Restart Claude Code for changes to take effect.");
-    println!("  Claude can now call: get_token_usage, get_session_summary, get_cache_efficiency, get_history, compare_sessions");
+    println!("  Claude can now call: get_token_usage, get_session_summary, get_cache_efficiency,");
+    println!("    get_history, compare_sessions, get_context_pressure, get_budget_status,");
+    println!("    get_optimization_suggestions, get_project_stats, list_sessions, and more.");
     Ok(())
 }
 
@@ -810,7 +817,6 @@ fn cmd_tag(db: &scopeon_core::Database, action: TagAction) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
 
     #[test]
@@ -873,5 +879,63 @@ mod tests {
         assert!(config["mcpServers"]["other-tool"].is_object());
         assert!(config["mcpServers"]["scopeon"].is_object());
         assert_eq!(config["mcpServers"]["scopeon"]["args"][0], "mcp");
+    }
+
+    #[test]
+    fn test_cmd_init_creates_claude_config() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let exe_str = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        // Simulate what cmd_init() writes into settings.json.
+        let settings = serde_json::json!({
+            "mcpServers": {
+                "scopeon": {
+                    "command": exe_str,
+                    "args": ["mcp"],
+                    "env": {}
+                }
+            }
+        });
+        let settings_path = tmp.path().join("settings.json");
+        fs::write(
+            &settings_path,
+            serde_json::to_string_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+
+        let raw = fs::read_to_string(&settings_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let entry = &parsed["mcpServers"]["scopeon"];
+        assert_eq!(entry["args"][0], "mcp");
+        assert!(entry["env"].is_object());
+        assert!(entry["command"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_cmd_init_preserves_existing_servers() {
+        // Verify that injecting scopeon does not clobber other MCP servers.
+        let mut settings = serde_json::json!({
+            "alwaysThinkingEnabled": true,
+            "mcpServers": {
+                "other-server": {
+                    "command": "other",
+                    "args": [],
+                    "env": {}
+                }
+            }
+        });
+        let exe_str = "/usr/local/bin/scopeon";
+        settings["mcpServers"]["scopeon"] = serde_json::json!({
+            "command": exe_str,
+            "args": ["mcp"],
+            "env": {}
+        });
+
+        assert!(settings["mcpServers"]["other-server"].is_object());
+        assert_eq!(settings["mcpServers"]["scopeon"]["args"][0], "mcp");
+        assert_eq!(settings["alwaysThinkingEnabled"], true);
     }
 }

@@ -961,8 +961,11 @@ fn predict_turns_remaining(turns: &[scopeon_core::Turn], tokens_remaining: i64) 
     if slope <= 0.0 {
         return None;
     }
+    // Clamp to a sane upper bound: a flat slope near 0 produces astronomically
+    // large predictions that are meaningless to the user.
+    const MAX_PREDICTED_TURNS: i64 = 10_000;
     let predicted = (tokens_remaining as f64 / slope).round() as i64;
-    Some(predicted.max(0))
+    Some(predicted.clamp(0, MAX_PREDICTED_TURNS))
 }
 
 fn handle_get_context_pressure(db: &Database) -> Value {

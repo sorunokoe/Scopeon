@@ -11,11 +11,6 @@ use crate::models::*;
 /// very short follow-up message than a genuine context compaction.
 pub const COMPACTION_MIN_PREV_TOKENS: i64 = 50_000;
 
-/// Fraction by which input tokens must fall relative to the previous turn to be
-/// classified as a compaction event (empirically, Claude's compaction reduces
-/// context by ~60–80 %; 50 % gives a comfortable margin below genuine drops).
-const COMPACTION_DROP_THRESHOLD: f64 = 0.50;
-
 static MIGRATIONS: &[&str] = &[
     // M0001 — initial schema
     "CREATE TABLE IF NOT EXISTS sessions (
@@ -977,44 +972,6 @@ impl Database {
     }
 
     /// Check whether a newly-inserted turn represents a compaction event by comparing
-    /// its input token count against the previous turn in the same session.
-    ///
-    /// A compaction is detected when:
-    /// - The previous turn had > 50 000 input tokens (avoids false positives).
-    /// - Input tokens dropped by more than 50% relative to the previous turn.
-    ///
-    /// Returns `true` if a compaction was detected (and the turn was marked).
-    pub fn check_compaction_at_turn(
-        &self,
-        turn_id: &str,
-        session_id: &str,
-        turn_index: i64,
-        current_input: i64,
-    ) -> Result<bool> {
-        let prev_input: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT input_tokens FROM turns
-                 WHERE session_id = ?1 AND turn_index < ?2
-                 ORDER BY turn_index DESC
-                 LIMIT 1",
-                params![session_id, turn_index],
-                |r| r.get(0),
-            )
-            .ok();
-        if let Some(prev) = prev_input {
-            let drop = prev - current_input;
-            if prev > COMPACTION_MIN_PREV_TOKENS
-                && drop > 0
-                && (drop as f64 / prev as f64) > COMPACTION_DROP_THRESHOLD
-            {
-                self.mark_turn_compaction(turn_id)?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     /// Returns the `input_tokens` of the turn immediately before `turn_index`
     /// in the given session, or `None` if no prior turn exists.
     pub fn get_turn_input_before(&self, session_id: &str, turn_index: i64) -> Result<Option<i64>> {
@@ -1131,6 +1088,403 @@ impl Database {
         Ok(())
     }
 
+    // ── Batch upserts (single transaction) ──────────────────────────────────
+
+    pub fn upsert_turns_batch(&self, turns: &[Turn]) -> Result<()> {
+        if turns.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: see reprice_all_in_transaction — same pattern; Database is always
+        // accessed through Arc<Mutex<Database>>, so at most one caller holds the mutex.
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO turns
+                    (id, session_id, turn_index, timestamp, duration_ms,
+                     input_tokens, cache_read_tokens, cache_write_tokens,
+                     cache_write_5m_tokens, cache_write_1h_tokens, output_tokens,
+                     thinking_tokens, mcp_call_count, mcp_input_token_est, text_output_tokens,
+                     model, service_tier, estimated_cost_usd)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+                 ON CONFLICT(id) DO UPDATE SET
+                     turn_index         = excluded.turn_index,
+                     timestamp          = excluded.timestamp,
+                     duration_ms        = excluded.duration_ms,
+                     input_tokens       = excluded.input_tokens,
+                     cache_read_tokens  = excluded.cache_read_tokens,
+                     cache_write_tokens = excluded.cache_write_tokens,
+                     cache_write_5m_tokens = excluded.cache_write_5m_tokens,
+                     cache_write_1h_tokens = excluded.cache_write_1h_tokens,
+                     output_tokens      = excluded.output_tokens,
+                     thinking_tokens    = excluded.thinking_tokens,
+                     mcp_call_count     = excluded.mcp_call_count,
+                     mcp_input_token_est = excluded.mcp_input_token_est,
+                     text_output_tokens = excluded.text_output_tokens,
+                     model              = excluded.model,
+                     service_tier       = excluded.service_tier,
+                     estimated_cost_usd = excluded.estimated_cost_usd
+                     -- is_compaction_event intentionally omitted: once set by the
+                     -- compaction detector it must not be overwritten by a re-parse.",
+            )?;
+            for turn in turns {
+                stmt.execute(params![
+                    turn.id,
+                    turn.session_id,
+                    turn.turn_index,
+                    turn.timestamp,
+                    turn.duration_ms,
+                    turn.input_tokens,
+                    turn.cache_read_tokens,
+                    turn.cache_write_tokens,
+                    turn.cache_write_5m_tokens,
+                    turn.cache_write_1h_tokens,
+                    turn.output_tokens,
+                    turn.thinking_tokens,
+                    turn.mcp_call_count,
+                    turn.mcp_input_token_est,
+                    turn.text_output_tokens,
+                    turn.model,
+                    turn.service_tier,
+                    turn.estimated_cost_usd,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn upsert_tool_calls_batch(&self, tool_calls: &[ToolCall]) -> Result<()> {
+        if tool_calls.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: see reprice_all_in_transaction — same pattern.
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR IGNORE INTO tool_calls (id, turn_id, session_id, tool_name, input_size_chars, input_hash, timestamp)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            )?;
+            for tc in tool_calls {
+                stmt.execute(params![
+                    tc.id,
+                    tc.turn_id,
+                    tc.session_id,
+                    tc.tool_name,
+                    tc.input_size_chars,
+                    tc.input_hash as i64,
+                    tc.timestamp,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn upsert_interaction_events_batch(&self, events: &[InteractionEvent]) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: see reprice_all_in_transaction — same pattern.
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO interaction_events (
+                    id, session_id, turn_id, task_run_id, correlation_id, parent_id, provider,
+                    timestamp, kind, phase, name, display_name, mcp_server, mcp_tool, hook_type,
+                    agent_type, execution_mode, model, status, success, input_size_chars,
+                    output_size_chars, prompt_size_chars, summary_size_chars, total_tokens,
+                    total_tool_calls, duration_ms, estimated_input_tokens, estimated_output_tokens,
+                    estimated_cost_usd, confidence
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
+                 )
+                 ON CONFLICT(id) DO UPDATE SET
+                    turn_id = COALESCE(excluded.turn_id, interaction_events.turn_id),
+                    task_run_id = COALESCE(excluded.task_run_id, interaction_events.task_run_id),
+                    correlation_id = COALESCE(excluded.correlation_id, interaction_events.correlation_id),
+                    parent_id = COALESCE(excluded.parent_id, interaction_events.parent_id),
+                    provider = COALESCE(NULLIF(excluded.provider, ''), interaction_events.provider),
+                    timestamp = excluded.timestamp,
+                    kind = excluded.kind,
+                    phase = excluded.phase,
+                    name = excluded.name,
+                    display_name = COALESCE(excluded.display_name, interaction_events.display_name),
+                    mcp_server = COALESCE(excluded.mcp_server, interaction_events.mcp_server),
+                    mcp_tool = COALESCE(excluded.mcp_tool, interaction_events.mcp_tool),
+                    hook_type = COALESCE(excluded.hook_type, interaction_events.hook_type),
+                    agent_type = COALESCE(excluded.agent_type, interaction_events.agent_type),
+                    execution_mode = COALESCE(excluded.execution_mode, interaction_events.execution_mode),
+                    model = COALESCE(excluded.model, interaction_events.model),
+                    status = COALESCE(excluded.status, interaction_events.status),
+                    success = COALESCE(excluded.success, interaction_events.success),
+                    input_size_chars = excluded.input_size_chars,
+                    output_size_chars = excluded.output_size_chars,
+                    prompt_size_chars = excluded.prompt_size_chars,
+                    summary_size_chars = excluded.summary_size_chars,
+                    total_tokens = COALESCE(excluded.total_tokens, interaction_events.total_tokens),
+                    total_tool_calls = COALESCE(excluded.total_tool_calls, interaction_events.total_tool_calls),
+                    duration_ms = COALESCE(excluded.duration_ms, interaction_events.duration_ms),
+                    estimated_input_tokens = excluded.estimated_input_tokens,
+                    estimated_output_tokens = excluded.estimated_output_tokens,
+                    estimated_cost_usd = excluded.estimated_cost_usd,
+                    confidence = excluded.confidence",
+            )?;
+            for event in events {
+                stmt.execute(params![
+                    event.id,
+                    event.session_id,
+                    event.turn_id,
+                    event.task_run_id,
+                    event.correlation_id,
+                    event.parent_id,
+                    event.provider,
+                    event.timestamp,
+                    event.kind,
+                    event.phase,
+                    event.name,
+                    event.display_name,
+                    event.mcp_server,
+                    event.mcp_tool,
+                    event.hook_type,
+                    event.agent_type,
+                    event.execution_mode,
+                    event.model,
+                    event.status,
+                    event.success.map(|v| v as i32),
+                    event.input_size_chars,
+                    event.output_size_chars,
+                    event.prompt_size_chars,
+                    event.summary_size_chars,
+                    event.total_tokens,
+                    event.total_tool_calls,
+                    event.duration_ms,
+                    event.estimated_input_tokens,
+                    event.estimated_output_tokens,
+                    event.estimated_cost_usd,
+                    event.confidence,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Atomically persist a full parse result: optional session upsert, all turns,
+    /// tool calls, interaction events, and the file-offset checkpoint.  Either
+    /// everything commits or nothing does — crash-safe.
+    ///
+    /// SAFETY: `unchecked_transaction` is used instead of `transaction` because
+    /// `self.conn` is behind `&self` (not `&mut self`). Nested transactions are
+    /// impossible here: `Database` is always accessed through `Arc<Mutex<Database>>`,
+    /// so at most one caller holds the mutex at a time.
+    pub fn commit_parse_result(
+        &self,
+        file_path: &str,
+        session: Option<&Session>,
+        turns: &[Turn],
+        tool_calls: &[ToolCall],
+        interaction_events: &[InteractionEvent],
+        new_offset: u64,
+        new_mtime: i64,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        if let Some(s) = session {
+            tx.execute(
+                "INSERT INTO sessions
+                    (id, project, project_name, slug, provider, provider_version, model, git_branch, started_at, last_turn_at, total_turns, is_subagent, parent_session_id, context_window_tokens)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 ON CONFLICT(id) DO UPDATE SET
+                    provider = COALESCE(NULLIF(excluded.provider, ''), sessions.provider),
+                    provider_version = COALESCE(NULLIF(excluded.provider_version, ''), sessions.provider_version),
+                    model = excluded.model,
+                    last_turn_at = excluded.last_turn_at,
+                    total_turns = excluded.total_turns,
+                    git_branch = excluded.git_branch,
+                    is_subagent = excluded.is_subagent,
+                    parent_session_id = excluded.parent_session_id,
+                    context_window_tokens = COALESCE(excluded.context_window_tokens, sessions.context_window_tokens)",
+                params![
+                    s.id,
+                    s.project,
+                    s.project_name,
+                    s.slug,
+                    s.provider,
+                    s.provider_version,
+                    s.model,
+                    s.git_branch,
+                    s.started_at,
+                    s.last_turn_at,
+                    s.total_turns,
+                    s.is_subagent as i32,
+                    s.parent_session_id,
+                    s.context_window_tokens,
+                ],
+            )?;
+        }
+
+        if !turns.is_empty() {
+            let mut stmt = tx.prepare(
+                "INSERT INTO turns
+                    (id, session_id, turn_index, timestamp, duration_ms,
+                     input_tokens, cache_read_tokens, cache_write_tokens,
+                     cache_write_5m_tokens, cache_write_1h_tokens, output_tokens,
+                     thinking_tokens, mcp_call_count, mcp_input_token_est, text_output_tokens,
+                     model, service_tier, estimated_cost_usd)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+                 ON CONFLICT(id) DO UPDATE SET
+                     turn_index         = excluded.turn_index,
+                     timestamp          = excluded.timestamp,
+                     duration_ms        = excluded.duration_ms,
+                     input_tokens       = excluded.input_tokens,
+                     cache_read_tokens  = excluded.cache_read_tokens,
+                     cache_write_tokens = excluded.cache_write_tokens,
+                     cache_write_5m_tokens = excluded.cache_write_5m_tokens,
+                     cache_write_1h_tokens = excluded.cache_write_1h_tokens,
+                     output_tokens      = excluded.output_tokens,
+                     thinking_tokens    = excluded.thinking_tokens,
+                     mcp_call_count     = excluded.mcp_call_count,
+                     mcp_input_token_est = excluded.mcp_input_token_est,
+                     text_output_tokens = excluded.text_output_tokens,
+                     model              = excluded.model,
+                     service_tier       = excluded.service_tier,
+                     estimated_cost_usd = excluded.estimated_cost_usd
+                     -- is_compaction_event intentionally omitted: once set by the
+                     -- compaction detector it must not be overwritten by a re-parse.",
+            )?;
+            for turn in turns {
+                stmt.execute(params![
+                    turn.id,
+                    turn.session_id,
+                    turn.turn_index,
+                    turn.timestamp,
+                    turn.duration_ms,
+                    turn.input_tokens,
+                    turn.cache_read_tokens,
+                    turn.cache_write_tokens,
+                    turn.cache_write_5m_tokens,
+                    turn.cache_write_1h_tokens,
+                    turn.output_tokens,
+                    turn.thinking_tokens,
+                    turn.mcp_call_count,
+                    turn.mcp_input_token_est,
+                    turn.text_output_tokens,
+                    turn.model,
+                    turn.service_tier,
+                    turn.estimated_cost_usd,
+                ])?;
+            }
+        }
+
+        if !tool_calls.is_empty() {
+            let mut stmt = tx.prepare(
+                "INSERT OR IGNORE INTO tool_calls (id, turn_id, session_id, tool_name, input_size_chars, input_hash, timestamp)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            )?;
+            for tc in tool_calls {
+                stmt.execute(params![
+                    tc.id,
+                    tc.turn_id,
+                    tc.session_id,
+                    tc.tool_name,
+                    tc.input_size_chars,
+                    tc.input_hash as i64,
+                    tc.timestamp,
+                ])?;
+            }
+        }
+
+        if !interaction_events.is_empty() {
+            let mut stmt = tx.prepare(
+                "INSERT INTO interaction_events (
+                    id, session_id, turn_id, task_run_id, correlation_id, parent_id, provider,
+                    timestamp, kind, phase, name, display_name, mcp_server, mcp_tool, hook_type,
+                    agent_type, execution_mode, model, status, success, input_size_chars,
+                    output_size_chars, prompt_size_chars, summary_size_chars, total_tokens,
+                    total_tool_calls, duration_ms, estimated_input_tokens, estimated_output_tokens,
+                    estimated_cost_usd, confidence
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
+                 )
+                 ON CONFLICT(id) DO UPDATE SET
+                    turn_id = COALESCE(excluded.turn_id, interaction_events.turn_id),
+                    task_run_id = COALESCE(excluded.task_run_id, interaction_events.task_run_id),
+                    correlation_id = COALESCE(excluded.correlation_id, interaction_events.correlation_id),
+                    parent_id = COALESCE(excluded.parent_id, interaction_events.parent_id),
+                    provider = COALESCE(NULLIF(excluded.provider, ''), interaction_events.provider),
+                    timestamp = excluded.timestamp,
+                    kind = excluded.kind,
+                    phase = excluded.phase,
+                    name = excluded.name,
+                    display_name = COALESCE(excluded.display_name, interaction_events.display_name),
+                    mcp_server = COALESCE(excluded.mcp_server, interaction_events.mcp_server),
+                    mcp_tool = COALESCE(excluded.mcp_tool, interaction_events.mcp_tool),
+                    hook_type = COALESCE(excluded.hook_type, interaction_events.hook_type),
+                    agent_type = COALESCE(excluded.agent_type, interaction_events.agent_type),
+                    execution_mode = COALESCE(excluded.execution_mode, interaction_events.execution_mode),
+                    model = COALESCE(excluded.model, interaction_events.model),
+                    status = COALESCE(excluded.status, interaction_events.status),
+                    success = COALESCE(excluded.success, interaction_events.success),
+                    input_size_chars = excluded.input_size_chars,
+                    output_size_chars = excluded.output_size_chars,
+                    prompt_size_chars = excluded.prompt_size_chars,
+                    summary_size_chars = excluded.summary_size_chars,
+                    total_tokens = COALESCE(excluded.total_tokens, interaction_events.total_tokens),
+                    total_tool_calls = COALESCE(excluded.total_tool_calls, interaction_events.total_tool_calls),
+                    duration_ms = COALESCE(excluded.duration_ms, interaction_events.duration_ms),
+                    estimated_input_tokens = excluded.estimated_input_tokens,
+                    estimated_output_tokens = excluded.estimated_output_tokens,
+                    estimated_cost_usd = excluded.estimated_cost_usd,
+                    confidence = excluded.confidence",
+            )?;
+            for event in interaction_events {
+                stmt.execute(params![
+                    event.id,
+                    event.session_id,
+                    event.turn_id,
+                    event.task_run_id,
+                    event.correlation_id,
+                    event.parent_id,
+                    event.provider,
+                    event.timestamp,
+                    event.kind,
+                    event.phase,
+                    event.name,
+                    event.display_name,
+                    event.mcp_server,
+                    event.mcp_tool,
+                    event.hook_type,
+                    event.agent_type,
+                    event.execution_mode,
+                    event.model,
+                    event.status,
+                    event.success.map(|v| v as i32),
+                    event.input_size_chars,
+                    event.output_size_chars,
+                    event.prompt_size_chars,
+                    event.summary_size_chars,
+                    event.total_tokens,
+                    event.total_tool_calls,
+                    event.duration_ms,
+                    event.estimated_input_tokens,
+                    event.estimated_output_tokens,
+                    event.estimated_cost_usd,
+                    event.confidence,
+                ])?;
+            }
+        }
+
+        tx.execute(
+            "INSERT OR REPLACE INTO file_offsets (file_path, byte_offset, last_modified) VALUES (?1, ?2, ?3)",
+            params![file_path, new_offset as i64, new_mtime],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn list_interaction_events_for_session(
         &self,
         session_id: &str,
@@ -1145,13 +1499,12 @@ impl Database {
                     estimated_cost_usd, confidence
               FROM interaction_events
               WHERE session_id = ?1
-              ORDER BY timestamp DESC
+              ORDER BY timestamp ASC
               LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![session_id, limit as i64], row_to_interaction_event)?;
-        let mut events = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-        events.reverse();
-        Ok(events)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn list_recent_interaction_events(&self, limit: usize) -> Result<Vec<InteractionEvent>> {
@@ -1351,6 +1704,27 @@ impl Database {
             .map_err(Into::into)
     }
 
+    pub fn get_stats_by_provider(&self) -> Result<std::collections::HashMap<String, (i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT provider, COUNT(DISTINCT id), COALESCE(SUM(total_turns), 0)
+             FROM sessions
+             WHERE provider != ''
+             GROUP BY provider",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows.flatten() {
+            map.insert(row.0, (row.1, row.2));
+        }
+        Ok(map)
+    }
+
     pub fn get_tool_stats(&self, session_id: Option<&str>) -> Result<Vec<ToolStat>> {
         let sql = if session_id.is_some() {
             "SELECT tool_name,
@@ -1416,7 +1790,7 @@ impl Database {
                 let rows = stmt.query_map([], |r| r.get::<_, f64>(0))?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
-            costs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            costs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             if costs.is_empty() {
                 0.0
             } else {

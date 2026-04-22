@@ -31,7 +31,7 @@ pub fn process_file(file_path: &Path, db: &Database) -> Result<()> {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or(0);
 
     let from_offset = if stored_offset > file_size && current_mtime > stored_mtime {
@@ -69,11 +69,28 @@ pub fn process_file(file_path: &Path, db: &Database) -> Result<()> {
 
     let result = parse_file_incremental(file_path, from_offset, start_turn_index)?;
 
-    if let Some(ref session) = result.session {
-        db.upsert_session(session)?;
+    if result.skipped_lines > 0 {
+        warn!(
+            "{} unparseable line(s) skipped in {:?} — data may be incomplete",
+            result.skipped_lines, file_path
+        );
+    }
 
-        // Auto-tag session from tool-call patterns (falls back to branch prefix).
-        // Only applies a tag if no manual tag has been set and the session has tool calls.
+    // Atomically write session, turns, tool calls, interaction events, and offset
+    // in a single transaction — crash-safe.
+    db.commit_parse_result(
+        &path_str,
+        result.session.as_ref(),
+        &result.turns,
+        &result.tool_calls,
+        &result.interaction_events,
+        result.new_offset,
+        current_mtime,
+    )?;
+
+    // Auto-tag session from tool-call patterns (falls back to branch prefix).
+    // Only applies a tag if no manual tag has been set and the session has tool calls.
+    if let Some(ref session) = result.session {
         if db
             .get_session_tags(&session.id)
             .map(|t| t.is_empty())
@@ -92,15 +109,6 @@ pub fn process_file(file_path: &Path, db: &Database) -> Result<()> {
                 }
             }
         }
-    }
-    for turn in &result.turns {
-        db.upsert_turn(turn)?;
-    }
-    for tc in &result.tool_calls {
-        db.upsert_tool_call(tc)?;
-    }
-    for event in &result.interaction_events {
-        db.upsert_interaction_event(event)?;
     }
 
     // §7.3: After turns are inserted, update session.total_turns from the authoritative
@@ -149,9 +157,6 @@ pub fn process_file(file_path: &Path, db: &Database) -> Result<()> {
         let timestamps: Vec<i64> = result.turns.iter().map(|t| t.timestamp).collect();
         db.refresh_daily_rollup_for_timestamps(&timestamps)?;
     }
-
-    // Update file offset
-    db.set_file_offset(&path_str, result.new_offset, current_mtime)?;
 
     Ok(())
 }

@@ -206,7 +206,7 @@ impl Provider for AiderProvider {
                 .ok()
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as i64)
+                .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
                 .unwrap_or(0),
         )?;
 
