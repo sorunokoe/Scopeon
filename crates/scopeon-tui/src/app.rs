@@ -717,10 +717,17 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyCode, _modifiers: KeyModifiers) {
-        // Help overlay dismisses anything
+        // Help overlay: q/Q quits, Esc just dismisses, any other key dismisses then falls through.
         if self.show_help {
             self.show_help = false;
-            return;
+            match key {
+                KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    self.quit = true;
+                    return;
+                },
+                KeyCode::Esc => return, // just close
+                _ => {}, // dismiss and fall through so the key still takes effect
+            }
         }
 
         // Filter mode in Sessions tab
@@ -1445,7 +1452,7 @@ fn build_provider_status(
     let (aider_sessions, aider_turns) = db_stats("aider");
     let (gemini_sessions, gemini_turns) = db_stats("gemini-cli");
     let (ollama_sessions, ollama_turns) = db_stats("ollama");
-    let (codex_sessions, codex_turns) = db_stats("generic-openai");
+    let (codex_sessions, codex_turns) = db_stats("codex");
 
     vec![
         ProviderStatus {
@@ -1506,13 +1513,17 @@ fn build_provider_status(
             config_hint: "~/Library/Application Support/Ollama/db.sqlite".to_string(),
         },
         ProviderStatus {
-            id: "generic".to_string(),
-            name: "Generic OpenAI".to_string(),
+            id: "codex".to_string(),
+            name: "OpenAI Codex CLI".to_string(),
             is_active: codex_available,
             session_count: codex_sessions,
             turn_count: codex_turns,
             last_update: None,
-            config_hint: "~/.codex/sessions/ or configure in ~/.scopeon/config.toml".to_string(),
+            config_hint: if codex_available {
+                "~/.codex/sessions/YYYY/MM/DD/*.jsonl  (auto-detected)".to_string()
+            } else {
+                "Install: npm install -g @openai/codex".to_string()
+            },
         },
         ProviderStatus {
             id: "cursor".to_string(),

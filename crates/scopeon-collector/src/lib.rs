@@ -7,8 +7,8 @@
 //! - where to find session logs (`watch_paths`)
 //! - how to scan them (`scan`)
 //!
-//! Supported providers: Claude Code, GitHub Copilot CLI, Aider, Cursor, Gemini CLI,
-//! Ollama, and a generic OpenAI-compatible provider.
+//! Supported providers: Claude Code, GitHub Copilot CLI, Codex (OpenAI CLI),
+//! Aider, Cursor, Gemini CLI, Ollama, and a generic OpenAI-compatible provider.
 //!
 //! ## Entry points
 //! - [`parse_file_incremental`] — parse new lines from a single `.jsonl` file
@@ -24,7 +24,7 @@ pub mod watcher;
 
 pub use parser::parse_file_incremental;
 pub use providers::{
-    AiderProvider, ClaudeCodeProvider, CopilotCliProvider, CursorProvider, GeminiCLIProvider,
-    GenericOpenAIProvider, OllamaProvider, Provider,
+    AiderProvider, ClaudeCodeProvider, CodexProvider, CopilotCliProvider, CursorProvider,
+    GeminiCLIProvider, GenericOpenAIProvider, OllamaProvider, Provider,
 };
 pub use watcher::{backfill_providers, start_watching_providers};

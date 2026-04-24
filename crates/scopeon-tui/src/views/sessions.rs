@@ -33,7 +33,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             app.theme,
             "⬡",
             "No sessions yet",
-            "Run Claude Code in any project to start collecting data.",
+            "Run Claude Code or Codex in any project to start collecting data.",
             "r",
             "refresh",
         );

@@ -31,6 +31,29 @@ Scopeon follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.1] — 2026-04-24
+
+### Added
+
+- **OpenAI Codex CLI provider** — Scopeon now tracks sessions from the Codex CLI
+  (`npm install -g @openai/codex`). Reads `~/.codex/sessions/YYYY/MM/DD/*.jsonl`
+  automatically; override the root with `CODEX_CONFIG_DIR`. Captures full per-turn token
+  breakdown (input, cached input, output, reasoning), tool calls (`function_call` events),
+  model name, git branch, and session cost. GPT-5 pricing included: `gpt-5.4-mini`,
+  `gpt-5.4`, `gpt-5.3-codex`, `gpt-5.2`, `gpt-5.1` (all verified 2026-04-24).
+
+### Fixed
+
+- **Providers tab** showed *Generic OpenAI* with zero sessions/turns even when Codex sessions
+  existed — the DB stats lookup used the wrong provider key (`"generic"` instead of `"codex"`).
+  The row is now correctly labelled *OpenAI Codex CLI* and shows real counts.
+- `GenericOpenAIProvider` no longer auto-discovers `~/.codex/sessions/` (it could not parse
+  the Codex event format and produced no data from those files).
+- Pressing **`q`** while the help overlay (`?`) was open closed the overlay but did not quit;
+  a second `q` press was required. Now `q`/`Q` quits immediately from the help overlay.
+
+---
+
 ## [0.8.0] — 2026-04-22
 
 ### Security

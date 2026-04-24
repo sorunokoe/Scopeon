@@ -35,13 +35,7 @@ pub struct GenericOpenAIProvider {
 
 impl GenericOpenAIProvider {
     pub fn new(paths: Vec<String>, name: String) -> Self {
-        let mut resolved: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
-        if let Some(home) = dirs::home_dir() {
-            let codex_path = home.join(".codex").join("sessions");
-            if codex_path.exists() && !resolved.contains(&codex_path) {
-                resolved.push(codex_path);
-            }
-        }
+        let resolved: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
         GenericOpenAIProvider {
             paths: resolved,
             name,

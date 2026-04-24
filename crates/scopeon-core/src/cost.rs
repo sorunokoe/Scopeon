@@ -22,7 +22,7 @@
 ///
 /// Update this whenever `PRICING` is updated so the TUI staleness warning
 /// resets. Format: `"YYYY-MM-DD"`.
-pub const PRICING_VERIFIED_DATE: &str = "2026-04-13";
+pub const PRICING_VERIFIED_DATE: &str = "2026-04-24";
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -130,6 +130,44 @@ static PRICING: &[ModelPricing] = &[
         cache_read_per_mtok: 1.50,
     },
     // ── OpenAI GPT ───────────────────────────────────────────────────────────
+    // GPT-5 series (Codex CLI uses gpt-5.4-mini).
+    // More-specific prefixes MUST come before the less-specific ones that
+    // they start with (e.g. "gpt-5.4-mini" before "gpt-5.4").
+    ModelPricing {
+        model_prefix: "gpt-5.4-mini",
+        input_per_mtok: 0.75,
+        output_per_mtok: 4.50,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.075,
+    },
+    ModelPricing {
+        model_prefix: "gpt-5.3-codex",
+        input_per_mtok: 2.50,
+        output_per_mtok: 15.00,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.25,
+    },
+    ModelPricing {
+        model_prefix: "gpt-5.4",
+        input_per_mtok: 2.50,
+        output_per_mtok: 15.00,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.25,
+    },
+    ModelPricing {
+        model_prefix: "gpt-5.2",
+        input_per_mtok: 1.75,
+        output_per_mtok: 14.00,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.175,
+    },
+    ModelPricing {
+        model_prefix: "gpt-5.1",
+        input_per_mtok: 1.25,
+        output_per_mtok: 10.00,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.125,
+    },
     ModelPricing {
         model_prefix: "gpt-4.1-nano",
         input_per_mtok: 0.10,

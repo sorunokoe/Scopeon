@@ -6,8 +6,8 @@ use clap::{Parser, Subcommand};
 
 use scopeon_collector::watcher;
 use scopeon_collector::{
-    AiderProvider, ClaudeCodeProvider, CopilotCliProvider, CursorProvider, GeminiCLIProvider,
-    GenericOpenAIProvider, OllamaProvider,
+    AiderProvider, ClaudeCodeProvider, CodexProvider, CopilotCliProvider, CursorProvider,
+    GeminiCLIProvider, GenericOpenAIProvider, OllamaProvider,
 };
 use scopeon_core::{Config, Database, UserConfig};
 
@@ -269,6 +269,7 @@ enum GitHookAction {
 fn build_providers(user_config: &UserConfig) -> Vec<Box<dyn scopeon_collector::Provider>> {
     vec![
         Box::new(ClaudeCodeProvider::new()),
+        Box::new(CodexProvider::new()),
         Box::new(OllamaProvider::new()),
         Box::new(GenericOpenAIProvider::new(
             user_config.providers.generic_paths.clone(),

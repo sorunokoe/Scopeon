@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 pub mod aider;
 pub mod claude;
+pub mod codex;
 pub mod copilot;
 pub mod cursor;
 pub mod gemini;
@@ -13,6 +14,7 @@ pub mod ollama;
 
 pub use aider::AiderProvider;
 pub use claude::ClaudeCodeProvider;
+pub use codex::CodexProvider;
 pub use copilot::CopilotCliProvider;
 pub use cursor::CursorProvider;
 pub use gemini::GeminiCLIProvider;

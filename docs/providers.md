@@ -4,6 +4,7 @@ Scopeon discovers log files automatically — no configuration needed for standa
 
 | Provider | Log location | Notes |
 |---|---|---|
+| **OpenAI Codex CLI** | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | Full token breakdown per turn; override path with `CODEX_CONFIG_DIR` |
 | **Claude Code** | `~/.claude/projects/**/*.jsonl` | Full token breakdown; MCP identity exact, task history estimated |
 | **GitHub Copilot CLI** | `~/.copilot/session-state/` | Rich provenance: tasks, subagents, skills, hooks, MCP/tool lifecycle, model changes |
 | **Aider** | `~/.aider/analytics.jsonl` | Analytics log; override with `AIDER_ANALYTICS_LOG` |
