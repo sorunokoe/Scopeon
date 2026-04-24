@@ -315,14 +315,15 @@ fn parse_codex_file(path: &Path) -> Result<ParseResult> {
 
                 match payload_type {
                     "task_started" => {
-                        let turn_id =
-                            payload.get("turn_id").and_then(Value::as_str).unwrap_or("");
+                        let turn_id = payload.get("turn_id").and_then(Value::as_str).unwrap_or("");
                         if turn_id.is_empty() {
                             continue;
                         }
                         current_turn_id = Some(turn_id.to_string());
-                        let started_sec =
-                            payload.get("started_at").and_then(Value::as_i64).unwrap_or(0);
+                        let started_sec = payload
+                            .get("started_at")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0);
                         turn_started_at.insert(turn_id.to_string(), started_sec * 1000);
                         if let Some(cw) =
                             payload.get("model_context_window").and_then(Value::as_i64)
@@ -365,8 +366,7 @@ fn parse_codex_file(path: &Path) -> Result<ParseResult> {
                     },
 
                     "task_complete" => {
-                        let turn_id =
-                            payload.get("turn_id").and_then(Value::as_str).unwrap_or("");
+                        let turn_id = payload.get("turn_id").and_then(Value::as_str).unwrap_or("");
                         if turn_id.is_empty() || session_id_str.is_empty() {
                             continue;
                         }
@@ -376,15 +376,10 @@ fn parse_codex_file(path: &Path) -> Result<ParseResult> {
                             .and_then(Value::as_i64)
                             .unwrap_or(0);
                         let completed_ms = completed_sec * 1000;
-                        let duration_ms =
-                            payload.get("duration_ms").and_then(Value::as_i64);
+                        let duration_ms = payload.get("duration_ms").and_then(Value::as_i64);
 
-                        let snap = last_token
-                            .get(turn_id)
-                            .copied()
-                            .unwrap_or_default();
-                        let model =
-                            turn_models.get(turn_id).cloned().unwrap_or_default();
+                        let snap = last_token.get(turn_id).copied().unwrap_or_default();
+                        let model = turn_models.get(turn_id).cloned().unwrap_or_default();
                         let cost = calculate_turn_cost(
                             &model,
                             snap.input_tokens,
@@ -393,8 +388,7 @@ fn parse_codex_file(path: &Path) -> Result<ParseResult> {
                             snap.cached_input_tokens,
                         );
 
-                        let turn_unique_id =
-                            format!("{}-{}", session_id_str, turn_id);
+                        let turn_unique_id = format!("{}-{}", session_id_str, turn_id);
                         let tool_count = pending_tool_calls
                             .get(turn_id)
                             .map(|v| v.len() as i64)
@@ -419,7 +413,8 @@ fn parse_codex_file(path: &Path) -> Result<ParseResult> {
                             thinking_tokens: snap.reasoning_tokens,
                             mcp_call_count: 0,
                             mcp_input_token_est: 0,
-                            text_output_tokens: snap.output_tokens
+                            text_output_tokens: snap
+                                .output_tokens
                                 .saturating_sub(snap.reasoning_tokens),
                             model: model.clone(),
                             service_tier: String::new(),
@@ -466,10 +461,7 @@ fn parse_codex_file(path: &Path) -> Result<ParseResult> {
                     continue;
                 };
 
-                let call_id = payload
-                    .get("call_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let call_id = payload.get("call_id").and_then(Value::as_str).unwrap_or("");
                 let tool_name = payload
                     .get("name")
                     .and_then(Value::as_str)
@@ -784,7 +776,7 @@ mod tests {
             session_meta("sess-6", "/home/user/project", "main"),
             task_started(tid, 1_745_500_000, 258_400),
             turn_context(tid, "gpt-5.4-mini"),
-            token_count(100, 50, 20, 0),  // streaming partial — must be overwritten
+            token_count(100, 50, 20, 0), // streaming partial — must be overwritten
             token_count(500, 200, 80, 10), // final — must be used
             task_complete(tid, 1_745_500_010, 1_500),
         ]);

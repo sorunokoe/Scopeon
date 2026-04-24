@@ -726,7 +726,7 @@ impl App {
                     return;
                 },
                 KeyCode::Esc => return, // just close
-                _ => {}, // dismiss and fall through so the key still takes effect
+                _ => {},                // dismiss and fall through so the key still takes effect
             }
         }
 
