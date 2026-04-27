@@ -66,24 +66,14 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Compact and Standard: tab-based layout.
     let sc = size_class(area);
     let banner_height = if app.alert_banner.is_some() { 1u16 } else { 0u16 };
-    // C-17: Scope bar — shown on Sessions tab when ≥2 providers exist.
-    let scope_bar_height = if app.tab == Tab::Sessions
-        && app.all_providers.len() >= 2
-        && sc == SizeClass::Standard
-    {
-        1u16
-    } else {
-        0u16
-    };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),                  // tab bar
-            Constraint::Length(banner_height),      // alert banner (0 when hidden)
-            Constraint::Length(scope_bar_height),   // scope bar (0 when hidden)
-            Constraint::Min(0),                     // content
-            Constraint::Length(1),                  // status bar
+            Constraint::Length(1),             // tab bar
+            Constraint::Length(banner_height), // alert banner (0 when hidden)
+            Constraint::Min(0),                // content
+            Constraint::Length(1),             // status bar
         ])
         .split(area);
 
@@ -104,20 +94,16 @@ pub fn draw(f: &mut Frame, app: &App) {
         f.render_widget(banner, chunks[1]);
     }
 
-    if scope_bar_height > 0 {
-        draw_scope_bar(f, app, chunks[2]);
-    }
-
     match app.tab {
-        Tab::Dashboard => dashboard::draw(f, app, chunks[3]),
-        Tab::Sessions => sessions::draw(f, app, chunks[3]),
-        Tab::Insights => insights::draw(f, app, chunks[3]),
-        Tab::Budget => budget::draw(f, app, chunks[3]),
-        Tab::Providers => providers::draw(f, app, chunks[3]),
-        Tab::Agents => agents::draw(f, app, chunks[3]),
+        Tab::Dashboard => dashboard::draw(f, app, chunks[2]),
+        Tab::Sessions => sessions::draw(f, app, chunks[2]),
+        Tab::Insights => insights::draw(f, app, chunks[2]),
+        Tab::Budget => budget::draw(f, app, chunks[2]),
+        Tab::Providers => providers::draw(f, app, chunks[2]),
+        Tab::Agents => agents::draw(f, app, chunks[2]),
     }
 
-    draw_status_bar(f, app, chunks[4], sc);
+    draw_status_bar(f, app, chunks[3], sc);
 
     // Floating toast — rendered above the status bar, right-aligned.
     if let Some((msg, _)) = &app.toast {
@@ -864,7 +850,7 @@ fn build_hints(app: &App) -> String {
         },
         Tab::Sessions => {
             if app.all_providers.len() >= 2 {
-                " ↑↓:select  Enter:detail  /:filter  s:sort  p:provider  m:model  ?:help  q:quit".to_string()
+                " ↑↓:select  Enter:detail  /:filter  s:sort  [ ]:provider  { }:model  Esc:reset  ?:help  q:quit".to_string()
             } else {
                 " ↑↓:select  Enter:detail  /:filter  s:sort  g/G:top/btm  ?:help  q:quit".to_string()
             }
@@ -905,60 +891,6 @@ fn draw_toast(f: &mut Frame, app: &App, area: Rect, msg: &str) {
         ))),
         toast_area,
     );
-}
-
-// ── C-17: Scope bar ───────────────────────────────────────────────────────────
-
-/// Renders a 1-line scope strip between the tab bar and content.
-/// Shows the active provider/model scope and hints for cycling.
-fn draw_scope_bar(f: &mut Frame, app: &App, area: Rect) {
-    let accent = app.theme.accent_color();
-    let muted = app.theme.muted_color();
-    let text_sec = app.theme.text_secondary();
-    let success = app.theme.success_color();
-
-    let provider_label = match &app.scope_provider {
-        None => "all providers".to_string(),
-        Some(p) => p.clone(),
-    };
-    let model_label = match &app.scope_model {
-        None => "all models".to_string(),
-        Some(m) => m.clone(),
-    };
-
-    let mut spans: Vec<Span> = vec![
-        Span::styled("  ◈ ", Style::default().fg(accent)),
-        Span::styled("Scope: ", Style::default().fg(muted)),
-        Span::styled(
-            format!("[{}]", provider_label),
-            Style::default()
-                .fg(if app.scope_provider.is_some() { success } else { text_sec })
-                .add_modifier(if app.scope_provider.is_some() {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ),
-        Span::styled(" › ", Style::default().fg(muted)),
-        Span::styled(
-            format!("[{}]", model_label),
-            Style::default()
-                .fg(if app.scope_model.is_some() { success } else { text_sec })
-                .add_modifier(if app.scope_model.is_some() {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ),
-        Span::styled("   p:provider  m:model", Style::default().fg(muted)),
-    ];
-
-    // Scope indicator: when both are None it's "viewing all" — add a reset hint
-    if app.scope_provider.is_some() || app.scope_model.is_some() {
-        spans.push(Span::styled("  Esc:reset", Style::default().fg(muted)));
-    }
-
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 // ── C-10: Command palette overlay ─────────────────────────────────────────────

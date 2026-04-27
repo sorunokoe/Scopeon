@@ -42,9 +42,25 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // Chip rows: provider row when ≥2 providers, model row when provider scoped and ≥2 models.
+    let show_provider_chips = app.all_providers.len() >= 2;
+    let show_model_chips = app.scope_provider.is_some() && app.all_models.len() >= 2;
+    let chip_rows = (show_provider_chips as u16) + (show_model_chips as u16);
+
+    let main_area = if chip_rows > 0 && area.height > chip_rows + 4 {
+        let v = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(chip_rows), Constraint::Min(0)])
+            .split(area);
+        draw_filter_chips(f, app, v[0], show_provider_chips, show_model_chips);
+        v[1]
+    } else {
+        area
+    };
+
     // C-05: Proportional list width — 38% on wide terminals, fixed 44 on narrow.
-    let list_w = if area.width >= 100 {
-        (area.width as f32 * 0.38) as u16
+    let list_w = if main_area.width >= 100 {
+        (main_area.width as f32 * 0.38) as u16
     } else {
         44u16
     };
@@ -52,56 +68,102 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let h = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(list_w), Constraint::Min(0)])
-        .split(area);
+        .split(main_area);
 
     draw_session_list(f, app, &sessions, h[0]);
     draw_session_detail(f, app, h[1]);
 }
 
+// ── Provider / model chip navigation row ─────────────────────────────────────
+
+/// Renders 1–2 chip rows showing provider and model scope selection.
+/// Keys `[`/`]` cycle providers; `{`/`}` cycle models.
+fn draw_filter_chips(
+    f: &mut Frame,
+    app: &App,
+    area: Rect,
+    show_providers: bool,
+    show_models: bool,
+) {
+    let t = app.theme;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    if show_providers {
+        lines.push(build_chip_row(
+            "Provider",
+            &app.all_providers,
+            &app.scope_provider,
+            t,
+            "  ]  next   [  prev",
+            app.scope_provider.is_some() || app.scope_model.is_some(),
+        ));
+    }
+    if show_models {
+        lines.push(build_chip_row(
+            "Model   ",
+            &app.all_models,
+            &app.scope_model,
+            t,
+            "  }  next   {  prev",
+            false,
+        ));
+    }
+
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+fn build_chip_row(
+    label: &'static str,
+    options: &[String],
+    current: &Option<String>,
+    t: crate::theme::Theme,
+    nav_hint: &'static str,
+    show_esc: bool,
+) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = vec![
+        Span::styled(format!("  ◈ {} ", label), Style::default().fg(t.muted_color())),
+    ];
+
+    // "All" chip
+    if current.is_none() {
+        spans.push(Span::styled(
+            "● All".to_string(),
+            Style::default().fg(t.heading_color()).add_modifier(Modifier::BOLD),
+        ));
+    } else {
+        spans.push(Span::styled("○ All".to_string(), Style::default().fg(t.muted_color())));
+    }
+
+    // Option chips
+    for opt in options {
+        spans.push(Span::styled("  ".to_string(), Style::default()));
+        let is_sel = current.as_deref() == Some(opt.as_str());
+        let display = shorten_model(opt);
+        if is_sel {
+            spans.push(Span::styled(
+                format!("● {}", display),
+                Style::default().fg(t.accent_color()).add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                format!("○ {}", display),
+                Style::default().fg(t.muted_color()),
+            ));
+        }
+    }
+
+    // Navigation hint
+    spans.push(Span::styled(nav_hint.to_string(), Style::default().fg(t.muted_color())));
+    if show_esc {
+        spans.push(Span::styled("   Esc all".to_string(), Style::default().fg(t.muted_color())));
+    }
+
+    Line::from(spans)
+}
+
 // ── Left panel: session list ──────────────────────────────────────────────────
 //
 // C-05: 2-line rich rows (project + time + model / cost + turns + cache bar).
-// C-18: Provider group headers when "all providers" scope and ≥2 providers.
-
-/// Determines if we should show provider group headers.
-/// Returns true when no provider scope is set and multiple providers have data.
-fn show_provider_groups(app: &App, sessions: &[&Session]) -> bool {
-    if app.scope_provider.is_some() {
-        return false;
-    }
-    if app.all_providers.len() < 2 {
-        return false;
-    }
-    // Only group when sessions span at least 2 distinct providers.
-    let mut seen = std::collections::HashSet::new();
-    for s in sessions {
-        if !s.provider.is_empty() {
-            seen.insert(s.provider.as_str());
-        }
-        if seen.len() >= 2 {
-            return true;
-        }
-    }
-    false
-}
-
-/// Determines if we should show model group headers.
-/// Returns true when a provider scope is set and sessions span ≥2 models.
-fn show_model_groups(app: &App, sessions: &[&Session]) -> bool {
-    if app.scope_provider.is_none() {
-        return false;
-    }
-    let mut seen = std::collections::HashSet::new();
-    for s in sessions {
-        if !s.model.is_empty() {
-            seen.insert(s.model.as_str());
-        }
-        if seen.len() >= 2 {
-            return true;
-        }
-    }
-    false
-}
 
 fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect) {
     let is_focused = app.pane_focus == PaneFocus::Left;
@@ -122,91 +184,15 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
     let inner_w = list_area.width.saturating_sub(2) as usize; // subtract borders
     let visible_lines = list_area.height.saturating_sub(2) as usize; // subtract borders
 
-    let do_provider_groups = show_provider_groups(app, sessions);
-    let do_model_groups = show_model_groups(app, sessions);
-
     // ── Build visual rows ─────────────────────────────────────────────────────
-    // Each entry: (lines for rendering, Option<session_idx>)
-    // - None = group header (1 line, non-selectable)
-    // - Some(i) = session row (2 lines)
-
     struct VisualEntry {
         lines: Vec<Line<'static>>,
-        session_idx: Option<usize>, // None = group header
+        session_idx: usize,
     }
 
     let mut entries: Vec<VisualEntry> = Vec::new();
-    let mut last_group_key = String::new();
-
-    // Pre-compute group totals for headers.
-    let mut group_costs: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-    let mut group_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-
-    for s in sessions.iter() {
-        let key = if do_provider_groups {
-            s.provider.clone()
-        } else if do_model_groups {
-            s.model.clone()
-        } else {
-            String::new()
-        };
-        if !key.is_empty() {
-            *group_counts.entry(key.clone()).or_insert(0) += 1;
-            if let Some(sm) = app.session_summaries.get(&s.id) {
-                *group_costs.entry(key).or_insert(0.0) += sm.estimated_cost_usd;
-            }
-        }
-    }
 
     for (sess_idx, s) in sessions.iter().enumerate() {
-        let group_key = if do_provider_groups {
-            s.provider.clone()
-        } else if do_model_groups {
-            shorten_model(&s.model)
-        } else {
-            String::new()
-        };
-
-        // Insert group header when group key changes.
-        if (do_provider_groups || do_model_groups) && group_key != last_group_key {
-            let cost = group_costs.get(&group_key).copied().unwrap_or(0.0);
-            let count = group_counts.get(&group_key).copied().unwrap_or(0);
-            let label = group_key.clone();
-            let label_short = truncate_with_ellipsis(&label, inner_w.saturating_sub(22));
-            let dashes = "─".repeat(
-                inner_w
-                    .saturating_sub(label_short.chars().count() + 20)
-                    .min(inner_w),
-            );
-            let header_line = Line::from(vec![
-                Span::styled(
-                    format!(" ── {} ", label_short),
-                    Style::default()
-                        .fg(app.theme.heading_color())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(dashes, Style::default().fg(app.theme.muted_color())),
-                Span::styled(
-                    format!(" {}s", count),
-                    Style::default().fg(app.theme.text_secondary()),
-                ),
-                if cost > 0.0 {
-                    Span::styled(
-                        format!("  ${:.2}", cost),
-                        Style::default().fg(app.theme.cost_color()),
-                    )
-                } else {
-                    Span::raw("")
-                },
-            ]);
-            entries.push(VisualEntry {
-                lines: vec![header_line],
-                session_idx: None,
-            });
-            last_group_key = group_key;
-        }
-
-        // Build the 2-line session entry.
         let is_sel = sess_idx == selected;
         let sel_style = if is_sel && is_focused {
             Style::default().add_modifier(Modifier::REVERSED)
@@ -338,16 +324,15 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
 
         entries.push(VisualEntry {
             lines: vec![final_l1, final_l2],
-            session_idx: Some(sess_idx),
+            session_idx: sess_idx,
         });
     }
 
     // ── Compute scroll offset so the selected session's lines are visible ─────
-    // Map session index → visual line start (counting all lines including headers).
     let mut visual_line = 0usize;
     let mut sel_visual_start = 0usize;
     for entry in &entries {
-        if entry.session_idx == Some(selected) {
+        if entry.session_idx == selected {
             sel_visual_start = visual_line;
         }
         visual_line += entry.lines.len();

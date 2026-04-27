@@ -969,14 +969,22 @@ impl App {
                 self.zen_clear_cycles = 0;
                 return;
             },
-            // C-17: Provider scope cycling (only on Sessions tab, when ≥2 providers exist).
-            KeyCode::Char('p') if self.tab == Tab::Sessions && self.all_providers.len() >= 2 => {
+            // Provider scope cycling (only on Sessions tab, when ≥2 providers exist).
+            KeyCode::Char(']') if self.tab == Tab::Sessions && self.all_providers.len() >= 2 => {
                 self.cycle_scope_provider();
                 return;
             },
-            // C-17: Model scope cycling (only on Sessions tab, when provider scoped or models exist).
-            KeyCode::Char('m') if self.tab == Tab::Sessions && !self.all_models.is_empty() => {
+            KeyCode::Char('[') if self.tab == Tab::Sessions && self.all_providers.len() >= 2 => {
+                self.cycle_scope_provider_prev();
+                return;
+            },
+            // Model scope cycling (only on Sessions tab, when provider scoped or models exist).
+            KeyCode::Char('}') if self.tab == Tab::Sessions && !self.all_models.is_empty() => {
                 self.cycle_scope_model();
+                return;
+            },
+            KeyCode::Char('{') if self.tab == Tab::Sessions && !self.all_models.is_empty() => {
+                self.cycle_scope_model_prev();
                 return;
             },
             // Number keys always switch tabs
@@ -1072,6 +1080,13 @@ impl App {
                         },
                         KeyCode::Right | KeyCode::Char('l') => {
                             self.pane_focus = PaneFocus::Right;
+                        },
+                        // Reset scope when Esc is pressed and a scope is active.
+                        KeyCode::Esc
+                            if self.scope_provider.is_some() || self.scope_model.is_some() =>
+                        {
+                            self.scope_provider = None;
+                            self.scope_model = None;
                         },
                         _ => {},
                     },
@@ -1259,7 +1274,7 @@ impl App {
         };
     }
 
-    // C-17: Cycle through available models for the current scope.
+    // Cycle through available models for the current scope.
     fn cycle_scope_model(&mut self) {
         if self.all_models.is_empty() {
             return;
@@ -1273,6 +1288,41 @@ impl App {
                         Some(self.all_models[i + 1].clone())
                     },
                     _ => None,
+                }
+            },
+        };
+    }
+
+    fn cycle_scope_provider_prev(&mut self) {
+        self.scope_model = None;
+        if self.all_providers.is_empty() {
+            return;
+        }
+        self.scope_provider = match self.scope_provider.take() {
+            None => Some(self.all_providers[self.all_providers.len() - 1].clone()),
+            Some(ref p) => {
+                let idx = self.all_providers.iter().position(|x| x == p);
+                match idx {
+                    Some(0) => None,
+                    Some(i) => Some(self.all_providers[i - 1].clone()),
+                    None => None,
+                }
+            },
+        };
+    }
+
+    fn cycle_scope_model_prev(&mut self) {
+        if self.all_models.is_empty() {
+            return;
+        }
+        self.scope_model = match self.scope_model.take() {
+            None => Some(self.all_models[self.all_models.len() - 1].clone()),
+            Some(ref m) => {
+                let idx = self.all_models.iter().position(|x| x == m);
+                match idx {
+                    Some(0) => None,
+                    Some(i) => Some(self.all_models[i - 1].clone()),
+                    None => None,
                 }
             },
         };
