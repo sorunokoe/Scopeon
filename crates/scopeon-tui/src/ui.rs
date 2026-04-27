@@ -11,7 +11,7 @@ use crate::logo::{logo_badge, logo_lines};
 use crate::text::{truncate_to_chars, truncate_with_ellipsis};
 use crate::theme::Theme;
 use crate::views::components::{micro_sparkline, spinner_char};
-use crate::views::{budget, insights, sessions};
+use crate::views::{budget, sessions};
 
 /// Terminal size tier — drives layout and density choices.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,7 +97,6 @@ pub fn draw(f: &mut Frame, app: &App) {
     match app.tab {
         Tab::Sessions => sessions::draw(f, app, chunks[2]),
         Tab::Spend => budget::draw(f, app, chunks[2]),
-        Tab::Health => insights::draw(f, app, chunks[2]),
     }
 
     draw_status_bar(f, app, chunks[3], sc);
@@ -548,13 +547,11 @@ fn draw_tab_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
         &[
             ("1", Tab::Sessions, "Sess"),
             ("2", Tab::Spend, "Spnd"),
-            ("3", Tab::Health, "Hlth"),
         ]
     } else {
         &[
             ("1", Tab::Sessions, "Sessions"),
             ("2", Tab::Spend, "Spend"),
-            ("3", Tab::Health, "Health"),
         ]
     };
 
@@ -846,8 +843,7 @@ fn build_hints(app: &App) -> String {
                 " ↑↓:select  Enter:detail  /:filter  s:sort  g/G:top/btm  ?:help  q:quit".to_string()
             }
         },
-        Tab::Spend => " 1-3:tabs  r:refresh  ?:help  q:quit".to_string(),
-        Tab::Health => " 1-3:tabs  ↑↓:scroll  r:refresh  ?:help  q:quit".to_string(),
+        Tab::Spend => " 1-2:tabs  r:refresh  ?:help  q:quit".to_string(),
     }
 }
 
@@ -1010,7 +1006,7 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
             Cell::from(""),
         ]),
         Row::new(vec![
-            Cell::from(Span::styled("  1-3", key_style)),
+            Cell::from(Span::styled("  1-2", key_style)),
             Cell::from(Span::styled("  Switch tabs", Style::default().fg(text))),
         ]),
         Row::new(vec![

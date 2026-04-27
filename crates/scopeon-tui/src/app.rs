@@ -55,7 +55,6 @@ impl SessionSort {
 pub enum Tab {
     Sessions = 0,
     Spend = 1,
-    Health = 2,
 }
 
 impl Tab {
@@ -63,7 +62,6 @@ impl Tab {
         match i {
             0 => Tab::Sessions,
             1 => Tab::Spend,
-            2 => Tab::Health,
             _ => Tab::Sessions,
         }
     }
@@ -71,7 +69,7 @@ impl Tab {
         self as usize
     }
     pub fn count() -> usize {
-        const TABS: &[Tab] = &[Tab::Sessions, Tab::Spend, Tab::Health];
+        const TABS: &[Tab] = &[Tab::Sessions, Tab::Spend];
         TABS.len()
     }
 }
@@ -858,7 +856,7 @@ impl App {
         if self.session_detail_mode {
             match key {
                 // Number keys always escape detail mode and switch tabs (global navigation).
-                KeyCode::Char(c @ '1'..='3') => {
+                KeyCode::Char(c @ '1'..='2') => {
                     self.session_detail_mode = false;
                     self.turn_scroll_detail = 0;
                     self.replay_turn_idx = None;
@@ -986,8 +984,7 @@ impl App {
                 return;
             },
             KeyCode::Char('3') => {
-                self.tab = Tab::Health;
-                self.pane_focus = PaneFocus::Left;
+                // 3 is no longer a tab — ignore
                 return;
             },
             // Tab key: cycle pane focus on split-pane tabs, else switch tabs
@@ -1067,7 +1064,6 @@ impl App {
                     },
                 }
             },
-            Tab::Health => {},
             Tab::Spend => match key {
                 KeyCode::Down | KeyCode::Char('j') => {},
                 KeyCode::Up | KeyCode::Char('k') => {},
@@ -1304,7 +1300,6 @@ impl App {
         vec![
             ("1 Sessions", |a| { a.tab = Tab::Sessions; }, "Go to Sessions tab"),
             ("2 Spend", |a| { a.tab = Tab::Spend; }, "Go to Spend tab"),
-            ("3 Health", |a| { a.tab = Tab::Health; }, "Go to Health tab"),
             ("refresh", |a| {
                 a.last_refresh = Instant::now() - a.refresh_interval;
                 a.refresh_in_progress = true;
@@ -1498,7 +1493,6 @@ fn tab_at_x(x: u16, active: Tab) -> Option<Tab> {
     let tabs: &[(&str, Tab, &str)] = &[
         ("1", Tab::Sessions, "Sessions"),
         ("2", Tab::Spend, "Spend"),
-        ("3", Tab::Health, "Health"),
     ];
 
     let mut cur_x = badge_w;

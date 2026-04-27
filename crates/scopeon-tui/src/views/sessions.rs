@@ -27,18 +27,6 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Live session banner — compact strip at top when a session is active
-    let area = if app.is_live && area.height > 5 {
-        let v = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(0)])
-            .split(area);
-        draw_live_banner(f, app, v[0]);
-        v[1]
-    } else {
-        area
-    };
-
     let sessions = app.filtered_sessions();
 
     if sessions.is_empty() && !app.sessions_filter_active {
@@ -290,7 +278,7 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
             ),
         ]);
 
-        // Line 2:   $cost  ·  Nt  ·  Cache X% bar
+        // Line 2:   $cost  ·  Nt  ·  X% bar
         let turns_str = format!("{}t", s.total_turns);
         let line2 = Line::from(vec![
             Span::styled("   ", Style::default()),
@@ -304,11 +292,11 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
                 muted_style,
             ),
             Span::styled(" · ", muted_style),
+            Span::styled(cache_bar, Style::default().fg(cache_color)),
             Span::styled(
-                format!("Cache {:>4} ", cache_str),
+                format!(" {:>4} ", cache_str),
                 muted_style,
             ),
-            Span::styled(cache_bar, Style::default().fg(cache_color)),
         ]);
 
         // When selected, apply reversed style across the entry lines.
@@ -465,7 +453,7 @@ fn draw_session_detail(f: &mut Frame, app: &App, area: Rect) {
 
     let v = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(11), Constraint::Min(0)])
+        .constraints([Constraint::Length(7), Constraint::Min(0)])
         .split(area);
 
     draw_detail_header(f, app, stats, border_style, v[0]);
@@ -490,39 +478,12 @@ fn draw_detail_header(
     let provider_version = session
         .map(|s| s.provider_version.as_str())
         .filter(|s| !s.is_empty())
-        .unwrap_or("—");
-    let interaction_count = app.selected_session_interaction_events.len();
-    let task_count = app.selected_session_task_runs.len();
-    let skill_count = app
-        .selected_session_interaction_events
-        .iter()
-        .filter(|event| event.kind == "skill")
-        .count();
-    let hook_count = app
-        .selected_session_interaction_events
-        .iter()
-        .filter(|event| event.kind == "hook")
-        .count();
-    let recent_tasks = app
-        .selected_session_task_runs
-        .iter()
-        .rev()
-        .take(2)
-        .map(|task| {
-            task.display_name
-                .as_deref()
-                .unwrap_or(&task.name)
-                .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
+        .unwrap_or("");
 
     let cache_pct = stats.cache_hit_rate * 100.0;
-    let cache_bar = fill_bar(stats.cache_hit_rate, 16);
+    let cache_bar = fill_bar(stats.cache_hit_rate, 14);
     let cache_col = app.theme.cache_color(cache_pct);
 
-    // IS-I: Compute shadow costs for Haiku and Sonnet comparisons.
-    // Use the session model and aggregate token counts.
     let shadow_haiku = shadow_cost(
         model,
         "claude-haiku-4",
@@ -531,180 +492,131 @@ fn draw_detail_header(
         stats.total_cache_write_tokens,
         stats.total_cache_read_tokens,
     );
-    let shadow_sonnet = shadow_cost(
-        model,
-        "claude-sonnet-4",
-        stats.total_input_tokens,
-        stats.total_output_tokens,
-        stats.total_cache_write_tokens,
-        stats.total_cache_read_tokens,
-    );
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("  Model:   ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                shorten_model(model),
-                Style::default()
-                    .fg(app.theme.model_color())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Project: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                project.to_string(),
-                Style::default().fg(app.theme.text_primary()),
-            ),
-            Span::styled("  Branch: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                branch.to_string(),
-                Style::default().fg(app.theme.warning_color()),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Provider: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                provider.to_string(),
-                Style::default().fg(app.theme.text_primary()),
-            ),
-            Span::styled("  Version: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                provider_version.to_string(),
-                Style::default().fg(app.theme.accent_color()),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Turns:  ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                stats.total_turns.to_string(),
-                Style::default().fg(app.theme.text_primary()),
-            ),
-            Span::styled("   Cost: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                format!("${:.4}", stats.estimated_cost_usd),
-                Style::default()
-                    .fg(app.theme.cost_color())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("   Saved: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                format!("${:.4}", stats.cache_savings_usd),
-                Style::default().fg(app.theme.success_color()),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Cache:  ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(cache_bar, Style::default().fg(cache_col)),
-            Span::styled(
-                format!(" {:.1}%", cache_pct),
-                Style::default().fg(cache_col),
-            ),
-            Span::styled("  MCP: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                stats.total_mcp_calls.to_string(),
-                Style::default().fg(app.theme.warning_color()),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Input:  ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                fmt_k(stats.total_input_tokens),
-                Style::default().fg(app.theme.accent_dim()),
-            ),
-            Span::styled("   Think: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                fmt_k(stats.total_thinking_tokens),
-                Style::default().fg(app.theme.cost_color()),
-            ),
-            Span::styled("   Output: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                fmt_k(stats.total_output_tokens),
-                Style::default().fg(app.theme.accent_color()),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "  Provenance: ",
-                Style::default().fg(app.theme.muted_color()),
-            ),
-            Span::styled(
-                format!("{} interactions", interaction_count),
-                Style::default().fg(app.theme.text_primary()),
-            ),
-            Span::styled("  Tasks: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                task_count.to_string(),
-                Style::default().fg(app.theme.warning_color()),
-            ),
-            Span::styled("  Skills: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                skill_count.to_string(),
-                Style::default().fg(app.theme.success_color()),
-            ),
-            Span::styled("  Hooks: ", Style::default().fg(app.theme.muted_color())),
-            Span::styled(
-                hook_count.to_string(),
-                Style::default().fg(app.theme.cost_color()),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "  Recent tasks: ",
-                Style::default().fg(app.theme.muted_color()),
-            ),
-            Span::styled(
-                if recent_tasks.is_empty() {
-                    "—".to_string()
-                } else {
-                    recent_tasks
-                },
-                Style::default().fg(app.theme.text_primary()),
-            ),
-        ]),
-        Line::from(vec![Span::styled(
-            "  [Enter] full-screen detail  [Tab] switch pane",
-            Style::default().fg(app.theme.muted_color()),
-        )]),
+    // Block title: project + branch (primary context at a glance)
+    let title = if !branch.is_empty() && branch != "—" {
+        format!(" {} ⎇ {} ", project, branch)
+    } else {
+        format!(" {} ", project)
+    };
+
+    let m = app.theme.muted_color();
+    let pv = if !provider_version.is_empty() {
+        format!("  {}  {}", provider, provider_version)
+    } else {
+        format!("  {}", provider)
+    };
+
+    // Line 1: model · cost · turns · provider
+    let mut line1 = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            shorten_model(model),
+            Style::default().fg(app.theme.model_color()).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("   ", Style::default().fg(m)),
+        Span::styled(
+            format!("${:.4}", stats.estimated_cost_usd),
+            Style::default().fg(app.theme.cost_color()).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("   ", Style::default().fg(m)),
+        Span::styled(
+            format!("{}t", stats.total_turns),
+            Style::default().fg(app.theme.text_primary()),
+        ),
+        Span::styled(pv, Style::default().fg(m)),
     ];
-
-    // IS-I: Append shadow pricing rows only when relevant comparisons exist.
-    let mut all_lines = lines;
-    if shadow_haiku.is_some() || shadow_sonnet.is_some() {
-        let mut shadow_spans = vec![Span::styled(
-            "  Shadow: ",
-            Style::default().fg(app.theme.muted_color()),
-        )];
-        if let Some(h) = shadow_haiku {
-            shadow_spans.push(Span::styled(
-                "Haiku ",
-                Style::default().fg(app.theme.muted_color()),
-            ));
-            shadow_spans.push(Span::styled(
-                format!("${:.4}", h),
-                Style::default().fg(app.theme.accent_color()),
-            ));
-        }
-        if let Some(s) = shadow_sonnet {
-            shadow_spans.push(Span::styled(
-                "  Sonnet ",
-                Style::default().fg(app.theme.muted_color()),
-            ));
-            shadow_spans.push(Span::styled(
-                format!("${:.4}", s),
-                Style::default().fg(app.theme.accent_color()),
-            ));
-        }
-        all_lines.insert(all_lines.len() - 1, Line::from(shadow_spans));
+    if let Some(h) = shadow_haiku {
+        line1.push(Span::styled("   ↓ haiku ", Style::default().fg(m)));
+        line1.push(Span::styled(
+            format!("${:.4}", h),
+            Style::default().fg(app.theme.accent_dim()),
+        ));
     }
 
+    // Line 2: cache bar + % + saved + MCP
+    let line2 = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(cache_bar, Style::default().fg(cache_col)),
+        Span::styled(
+            format!(" {:.0}%", cache_pct),
+            Style::default().fg(cache_col).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  saved ", Style::default().fg(m)),
+        Span::styled(
+            format!("${:.4}", stats.cache_savings_usd),
+            Style::default().fg(app.theme.success_color()),
+        ),
+        Span::styled("  MCP ", Style::default().fg(m)),
+        Span::styled(
+            stats.total_mcp_calls.to_string(),
+            Style::default().fg(app.theme.warning_color()),
+        ),
+    ];
+
+    // Line 3: tokens (input / output / think)
+    let line3 = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(fmt_k(stats.total_input_tokens), Style::default().fg(app.theme.accent_dim())),
+        Span::styled(" in  ", Style::default().fg(m)),
+        Span::styled(fmt_k(stats.total_output_tokens), Style::default().fg(app.theme.accent_color())),
+        Span::styled(" out", Style::default().fg(m)),
+        if stats.total_thinking_tokens > 0 {
+            Span::styled(
+                format!("  {} think", fmt_k(stats.total_thinking_tokens)),
+                Style::default().fg(app.theme.cost_color()),
+            )
+        } else {
+            Span::styled("", Style::default())
+        },
+    ];
+
+    // Line 4: global health + top suggestion — only when there's insight data
+    let show_health = app.health_score > 0.0 || !app.suggestions.is_empty();
+    let health_line = if show_health {
+        let hc = app.theme.health_color(app.health_score);
+        let mut spans = vec![
+            Span::styled("  ⬡ ", Style::default().fg(m)),
+            Span::styled(
+                format!("{:.0}", app.health_score),
+                Style::default().fg(hc).add_modifier(Modifier::BOLD),
+            ),
+        ];
+        if let Some(s) = app.suggestions.first() {
+            spans.push(Span::styled("  ⚡ ", Style::default().fg(app.theme.warning_color())));
+            spans.push(Span::styled(
+                truncate_with_ellipsis(s.title, 48),
+                Style::default().fg(app.theme.text_secondary()),
+            ));
+        }
+        Some(Line::from(spans))
+    } else {
+        None
+    };
+
+    // Line 5: nav hint
+    let hint_line = Line::from(vec![Span::styled(
+        "  ↑↓ scroll turns  ·  Enter fullscreen  ·  Tab switch pane",
+        Style::default().fg(m),
+    )]);
+
+    let mut lines = vec![
+        Line::from(line1),
+        Line::from(line2),
+        Line::from(line3),
+    ];
+    if let Some(hl) = health_line {
+        lines.push(hl);
+    }
+    lines.push(hint_line);
+
     f.render_widget(
-        Paragraph::new(all_lines).block(
+        Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(app.theme.border_type())
                 .border_style(border_style)
-                .title(" Session Detail "),
+                .title(title),
         ),
         area,
     );
@@ -1056,77 +968,4 @@ fn fmt_k(n: i64) -> String {
     }
 }
 
-// ── Live session banner ───────────────────────────────────────────────────────
 
-/// Renders a compact 1-line banner at the top of the Sessions tab when a
-/// session is actively running. Shows project, branch, cost, turns, ctx%, cache%.
-fn draw_live_banner(f: &mut Frame, app: &App, area: Rect) {
-    let t = app.theme;
-    let session = app.live_stats.as_ref().and_then(|ls| ls.session.as_ref());
-
-    let project = session
-        .map(|s| truncate_with_ellipsis(&s.project_name, 18))
-        .unwrap_or_default();
-    let branch = session
-        .filter(|s| !s.git_branch.is_empty() && s.git_branch != "—")
-        .map(|s| format!(" ⎇ {}", truncate_with_ellipsis(&s.git_branch, 10)))
-        .unwrap_or_default();
-    let model = session.map(|s| shorten_model(&s.model)).unwrap_or_default();
-
-    let cost = app.budget.daily_spent;
-    let ctx_pct = app.budget.context_pressure_pct;
-    let cache_pct = app
-        .live_stats
-        .as_ref()
-        .map(|s| s.cache_hit_rate * 100.0)
-        .unwrap_or(0.0);
-    let turns = session.map(|s| s.total_turns).unwrap_or(0);
-    let w = area.width as usize;
-
-    let base_w = 10 + project.len() + branch.len();
-
-    let mut spans: Vec<Span<'static>> = vec![
-        Span::styled(
-            "  ◉ LIVE  ".to_string(),
-            Style::default()
-                .fg(t.success_color())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            project.clone(),
-            Style::default()
-                .fg(t.text_primary())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(branch.clone(), Style::default().fg(t.warning_color())),
-    ];
-
-    if w > base_w + 15 {
-        spans.push(Span::styled(
-            format!("  ${:.3}", cost),
-            Style::default().fg(t.cost_color()),
-        ));
-        spans.push(Span::styled(
-            format!("  {}t", turns),
-            Style::default().fg(t.muted_color()),
-        ));
-    }
-    if w > base_w + 32 {
-        spans.push(Span::styled(
-            format!("  ctx {:.0}%", ctx_pct),
-            Style::default().fg(t.context_color(ctx_pct)),
-        ));
-        spans.push(Span::styled(
-            format!("  cache {:.0}%", cache_pct),
-            Style::default().fg(t.cache_color(cache_pct)),
-        ));
-    }
-    if w > base_w + 50 && !model.is_empty() {
-        spans.push(Span::styled(
-            format!("  {}", model),
-            Style::default().fg(t.model_color()),
-        ));
-    }
-
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
-}
