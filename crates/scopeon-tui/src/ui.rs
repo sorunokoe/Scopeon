@@ -108,6 +108,12 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     draw_status_bar(f, app, chunks[3], sc);
 
+    // Floating toast — rendered above the status bar, right-aligned.
+    // Appears for ~3 s then the toast field is cleared by the event loop.
+    if let Some((msg, _)) = &app.toast {
+        draw_toast(f, app, area, msg);
+    }
+
     if app.show_help {
         draw_help_overlay(f, app, area);
     }
@@ -542,20 +548,20 @@ fn draw_tab_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
     // Compact mode: very short labels to fit 55-79 col terminals.
     let tab_labels: &[(&str, Tab, &str)] = if sc == SizeClass::Compact {
         &[
-            ("1", Tab::Dashboard, "Dash"),
-            ("2", Tab::Sessions, "Sess"),
-            ("3", Tab::Insights, "Ins"),
-            ("4", Tab::Budget, "Bud"),
-            ("5", Tab::Providers, "Prov"),
+            ("1", Tab::Dashboard, "Live"),
+            ("2", Tab::Sessions, "Hist"),
+            ("3", Tab::Insights, "Hlth"),
+            ("4", Tab::Budget, "Spnd"),
+            ("5", Tab::Providers, "Src"),
             ("6", Tab::Agents, "Ag"),
         ]
     } else {
         &[
-            ("1", Tab::Dashboard, "Dashboard"),
-            ("2", Tab::Sessions, "Sessions"),
-            ("3", Tab::Insights, "Insights"),
-            ("4", Tab::Budget, "Budget"),
-            ("5", Tab::Providers, "Providers"),
+            ("1", Tab::Dashboard, "Live"),
+            ("2", Tab::Sessions, "History"),
+            ("3", Tab::Insights, "Health"),
+            ("4", Tab::Budget, "Spend"),
+            ("5", Tab::Providers, "Sources"),
             ("6", Tab::Agents, "Agents"),
         ]
     };
@@ -747,11 +753,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
         format!("↻{}s ", secs)
     };
 
-    let hints: String = if let Some((msg, _)) = &app.toast {
-        format!("  ✓ {}", msg)
-    } else {
-        build_hints(app)
-    };
+    let hints: String = build_hints(app);
 
     // IS-15: Overhead transparency — show Scopeon's own memory footprint.
     let overhead_str = get_process_rss_mb()
@@ -817,16 +819,16 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
     );
 }
 
-/// Build context-sensitive keyboard hints, rotating through sets every ~8 ticks.
+/// Build context-sensitive keyboard hints — all relevant hints shown at once.
+/// Hints are truncated from the right if the terminal is too narrow to fit them.
+/// No rotation: users should always see the most useful shortcuts for the current state.
 fn build_hints(app: &App) -> String {
-    let tick_group = (app.hint_tick / 40) as usize; // rotate every ~8s (40 × 200ms)
-
     match app.tab {
         Tab::Sessions if app.session_detail_mode => {
             if app.replay_turn_idx.is_some() {
-                " ← →:scrub  ↑↓:scroll  Esc:exit replay".to_string()
+                " ←→:scrub  ↑↓:scroll  Esc:exit replay".to_string()
             } else {
-                " → :replay  ↑↓:scroll  g:top  G:bottom  Esc:back".to_string()
+                " →:replay  ↑↓:scroll  g/G:top/btm  Esc:back".to_string()
             }
         },
         Tab::Sessions if app.sessions_filter_active => {
@@ -834,28 +836,44 @@ fn build_hints(app: &App) -> String {
                 .to_string()
         },
         Tab::Sessions => {
-            let sets = [
-                " ↑↓:select  Enter:detail  /:filter  Tab:pane",
-                " s:sort  g:top  G:bottom  Tab:pane",
-            ];
-            sets[tick_group % sets.len()].to_string()
+            " ↑↓:select  Enter:detail  /:filter  s:sort  g/G:top/btm  ?:help  q:quit".to_string()
         },
-        Tab::Budget => {
-            let sets = [
-                " 1-6:tabs  r:refresh  ?:help",
-                " Set limits: ~/.scopeon/config.toml",
-            ];
-            sets[tick_group % sets.len()].to_string()
-        },
-        Tab::Dashboard => {
-            let sets = [
-                " 1-6:tabs  ↑↓:scroll  r:refresh",
-                " c:copy stats  ?:help  q:quit",
-            ];
-            sets[tick_group % sets.len()].to_string()
-        },
-        _ => " 1-6:tabs  ↑↓:scroll  r:refresh  ?:help".to_string(),
+        Tab::Budget => " 1-6:tabs  r:refresh  ?:help  q:quit".to_string(),
+        Tab::Dashboard => " 1-6:tabs  c:copy  r:refresh  z:zen  ?:help  q:quit".to_string(),
+        Tab::Insights => " 1-6:tabs  ↑↓:scroll  r:refresh  ?:help  q:quit".to_string(),
+        _ => " 1-6:tabs  ↑↓:scroll  r:refresh  ?:help  q:quit".to_string(),
     }
+}
+
+// ── Floating toast notification ───────────────────────────────────────────────
+
+/// Renders a small, right-aligned floating toast 2 rows above the status bar.
+/// The toast fades from the success color toward muted as time passes — callers
+/// should clear `app.toast` after ~3 seconds so this naturally disappears.
+fn draw_toast(f: &mut Frame, app: &App, area: Rect, msg: &str) {
+    let text = format!("  ✓  {}  ", msg);
+    let toast_w = (text.len() as u16 + 2).min(area.width.saturating_sub(2));
+    let toast_h = 1u16;
+    // Position: bottom-right, 2 rows above the status bar (which is the last row).
+    let x = area.width.saturating_sub(toast_w + 1);
+    let y = area.height.saturating_sub(3);
+    let toast_area = Rect {
+        x,
+        y,
+        width: toast_w,
+        height: toast_h,
+    };
+
+    f.render_widget(ratatui::widgets::Clear, toast_area);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            text,
+            Style::default()
+                .fg(app.theme.success_color())
+                .add_modifier(Modifier::BOLD),
+        ))),
+        toast_area,
+    );
 }
 
 // ── Help overlay ──────────────────────────────────────────────────────────────

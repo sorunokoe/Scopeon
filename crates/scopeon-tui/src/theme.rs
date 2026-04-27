@@ -22,6 +22,51 @@ use ratatui::{
     widgets::BorderType,
 };
 
+/// Semantic icon vocabulary used throughout the TUI.
+///
+/// Using a single source of truth prevents the mixed-glyph problem where
+/// `◈`, `●`, `◉`, `◎`, `⬡`, `◆`, `💡`, `🔴` all appear with no coherent system.
+///
+/// Glyphs are chosen from the Basic Multilingual Plane only — no emoji,
+/// no variation selectors — guaranteeing consistent single-column rendering
+/// in every terminal font.
+pub struct Icons;
+
+impl Icons {
+    /// Actively running / live session.
+    pub const LIVE: &'static str = "◉";
+    /// Idle / stopped session.
+    pub const IDLE: &'static str = "◎";
+    /// Health / score indicator.
+    pub const HEALTH: &'static str = "⬡";
+    /// Cost / monetary metric.
+    pub const COST: &'static str = "◇";
+    /// Cache / speed metric.
+    pub const CACHE: &'static str = "⚡";
+    /// Context window pressure.
+    pub const CONTEXT: &'static str = "▣";
+    /// Warning / caution (time-sensitive).
+    pub const WARN: &'static str = "⚠";
+    /// Critical error.
+    pub const ERROR: &'static str = "✗";
+    /// Success / all-clear.
+    pub const OK: &'static str = "✓";
+    /// Actionable tip / suggestion.
+    pub const TIP: &'static str = "→";
+    /// Git branch.
+    pub const BRANCH: &'static str = "⎇";
+    /// Agent / task node.
+    pub const AGENT: &'static str = "◆";
+    /// Scopeon brand mark.
+    pub const BRAND: &'static str = "◈";
+    /// Separator between metadata items.
+    pub const SEP: &'static str = "·";
+    /// Provider / data source.
+    pub const SOURCE: &'static str = "●";
+    /// Inactive / unconfigured provider.
+    pub const SOURCE_OFF: &'static str = "○";
+}
+
 /// Active visual theme, derived from `[general] theme` in user config.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Theme {
@@ -214,11 +259,15 @@ impl Theme {
     }
 
     /// Section / column heading colour.
+    ///
+    /// Distinct from `warning_color` — headings have neutral authority,
+    /// warnings carry urgency.  In Cockpit mode, a soft blue-white reads
+    /// as "label/title" without triggering the same alarm reflex as amber.
     pub fn heading_color(self) -> Color {
         match self {
-            Theme::Cockpit => Color::Rgb(255, 196, 0), // golden amber
-            Theme::HighContrast => Color::LightYellow,
-            Theme::Standard => Color::Yellow,
+            Theme::Cockpit => Color::Rgb(180, 190, 255), // soft blue-white
+            Theme::HighContrast => Color::LightCyan,
+            Theme::Standard => Color::Cyan,
         }
     }
 

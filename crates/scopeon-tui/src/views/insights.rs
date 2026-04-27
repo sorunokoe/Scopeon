@@ -1,4 +1,4 @@
-/// Tab 3: Insights — Health score + waste signals + visual metric bars
+/// Tab 3: Health — Health score + waste signals + visual metric bars
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -11,7 +11,7 @@ use scopeon_core::PRICING_VERIFIED_DATE;
 use scopeon_metrics::{MetricCategory, MetricValue};
 
 use crate::app::App;
-use crate::views::components::themed_block;
+use crate::views::components::{themed_block, themed_block_borders};
 use crate::views::dashboard::health_color;
 
 /// Returns the number of days since [`PRICING_VERIFIED_DATE`], or `None` if
@@ -56,7 +56,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 " ⚠ ",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(app.theme.warning_color())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
@@ -65,7 +65,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                      Verify at anthropic.com/pricing · openai.com/api/pricing",
                     PRICING_VERIFIED_DATE, days
                 ),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(app.theme.warning_color()),
             ),
         ]));
         f.render_widget(warning, warn_area);
@@ -146,14 +146,14 @@ fn draw_waste_signals(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  ✓ No waste signals detected",
-            Style::default().fg(Color::Green),
+            Style::default().fg(app.theme.success_color()),
         )));
     } else {
         for signal in &waste.signals {
             let (icon, color) = match signal.severity {
-                scopeon_metrics::waste::Severity::Critical => ("✗", Color::Red),
-                scopeon_metrics::waste::Severity::Warning => ("⚠", Color::Yellow),
-                scopeon_metrics::waste::Severity::Info => ("ℹ", Color::Cyan),
+                scopeon_metrics::waste::Severity::Critical => ("✗", app.theme.error_color()),
+                scopeon_metrics::waste::Severity::Warning => ("⚠", app.theme.warning_color()),
+                scopeon_metrics::waste::Severity::Info => ("ℹ", app.theme.accent_color()),
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("  {} ", icon), Style::default().fg(color)),
@@ -163,15 +163,15 @@ fn draw_waste_signals(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("  Waste: ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Waste: ", Style::default().fg(app.theme.muted_color())),
         Span::styled(
             format!("{:.0}/100", waste.waste_score),
             Style::default().fg(if waste.waste_score >= 75.0 {
-                Color::Red
+                app.theme.error_color()
             } else if waste.waste_score >= 50.0 {
-                Color::Yellow
+                app.theme.warning_color()
             } else {
-                Color::Green
+                app.theme.success_color()
             }),
         ),
         Span::styled(
@@ -180,7 +180,7 @@ fn draw_waste_signals(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 ""
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.muted_color()),
         ),
     ]));
 
@@ -197,18 +197,29 @@ fn draw_suggestions(f: &mut Frame, app: &App, area: Rect) {
             Line::from(""),
             Line::from(Span::styled(
                 "  ✓ No optimization suggestions",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(app.theme.muted_color()),
             )),
         ];
         f.render_widget(
-            Paragraph::new(lines).block(themed_block(app.theme, "Suggestions", false)),
+            // Right panel: share left border with the waste signals panel.
+            Paragraph::new(lines).block(themed_block_borders(
+                app.theme,
+                "Suggestions",
+                false,
+                Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+            )),
             area,
         );
         return;
     }
 
-    // Outer container block.
-    let block = themed_block(app.theme, "Suggestions", false);
+    // Outer container block — no left border to avoid double-border with the waste panel.
+    let block = themed_block_borders(
+        app.theme,
+        "Suggestions",
+        false,
+        Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+    );
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -230,7 +241,7 @@ fn draw_suggestions(f: &mut Frame, app: &App, area: Rect) {
                 ("⚠", app.theme.warning_color(), app.theme.warning_color())
             },
             scopeon_metrics::suggestions::Severity::Info => {
-                ("💡", app.theme.accent_color(), app.theme.accent_color())
+                ("→", app.theme.accent_color(), app.theme.accent_color())
             },
         };
 

@@ -141,6 +141,27 @@ pub fn themed_block(theme: Theme, title: &str, focused: bool) -> Block<'static> 
         .title(title)
 }
 
+/// Like `themed_block` but with explicit border sides — used for adjacent split panels to
+/// avoid the double-border artifact where two `Borders::ALL` panes share an edge.
+pub fn themed_block_borders(
+    theme: Theme,
+    title: &str,
+    focused: bool,
+    borders: Borders,
+) -> Block<'static> {
+    let border_style = if focused {
+        theme.active_border_style()
+    } else {
+        theme.inactive_border_style()
+    };
+    let title = format!(" {} ", title);
+    Block::default()
+        .borders(borders)
+        .border_type(theme.border_type())
+        .border_style(border_style)
+        .title(title)
+}
+
 // ── KPI row ───────────────────────────────────────────────────────────────────
 
 /// Returns a single `Line` with `n` KPI chips separated by dim `│` delimiters.

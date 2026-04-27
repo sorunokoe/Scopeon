@@ -127,27 +127,51 @@ fn draw_period_card(f: &mut Frame, app: &App, label: &str, spent: f64, limit: f6
         ("✓", app.theme.success_color())
     };
 
-    // Inner width = card width - 2 borders - 2 left-pad
     let inner_w = area.width.saturating_sub(4) as usize;
 
-    // Line 0: top padding
-    // Line 1: amount + status icon
-    let amount_line = Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("${:.2}", spent),
-            Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  spent", Style::default().fg(app.theme.muted_color())),
-        Span::styled(
-            format!("  {}", status_icon),
-            Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
-        ),
-    ]);
+    // Hero line: REMAINING (the most important number for the user).
+    let hero_line = if has_limit {
+        let remaining = (limit - spent).max(0.0);
+        let over = (spent - limit).max(0.0);
+        if spent > limit {
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("${:.2} over budget", over),
+                    Style::default()
+                        .fg(app.theme.error_color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  {}", status_icon),
+                    Style::default().fg(app.theme.error_color()),
+                ),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("${:.2} remaining", remaining),
+                    Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  {}", status_icon),
+                    Style::default().fg(bar_color),
+                ),
+            ])
+        }
+    } else {
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("${:.2} spent", spent),
+                Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
+            ),
+        ])
+    };
 
-    // Line 2 + 3: bar + remaining (or hint when no limit)
+    // Secondary line: progress bar + "of $limit" or "no limit" hint.
     let (bar_line, detail_line) = if has_limit {
-        // Bar spans all inner width minus a small percentage suffix
         let bar_w = inner_w.saturating_sub(5);
         let filled = ((ratio * bar_w as f64) as usize).min(bar_w);
         let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
@@ -157,37 +181,21 @@ fn draw_period_card(f: &mut Frame, app: &App, label: &str, spent: f64, limit: f6
             Span::styled(bar, Style::default().fg(bar_color)),
             Span::styled(
                 format!(" {:>3}%", pct),
-                Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
+                Style::default().fg(app.theme.muted_color()),
             ),
         ]);
 
-        let remaining = (limit - spent).max(0.0);
-        let over = (spent - limit).max(0.0);
-        let dl = if spent > limit {
-            Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(
-                    format!("${:.2} over budget", over),
-                    Style::default().fg(app.theme.error_color()),
-                ),
-                Span::styled(
-                    format!("  / ${:.2}", limit),
-                    Style::default().fg(app.theme.muted_color()),
-                ),
-            ])
-        } else {
-            Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(
-                    format!("${:.2} remaining", remaining),
-                    Style::default().fg(app.theme.success_color()),
-                ),
-                Span::styled(
-                    format!("  / ${:.2}", limit),
-                    Style::default().fg(app.theme.muted_color()),
-                ),
-            ])
-        };
+        let dl = Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("${:.2} used", spent),
+                Style::default().fg(app.theme.muted_color()),
+            ),
+            Span::styled(
+                format!("  of ${:.2}", limit),
+                Style::default().fg(app.theme.muted_color()),
+            ),
+        ]);
         (bl, dl)
     } else {
         let bl = Line::from(Span::styled(
@@ -201,9 +209,8 @@ fn draw_period_card(f: &mut Frame, app: &App, label: &str, spent: f64, limit: f6
         (bl, dl)
     };
 
-    let lines = vec![Line::from(""), amount_line, bar_line, detail_line];
+    let lines = vec![Line::from(""), hero_line, bar_line, detail_line];
 
-    // Border color reflects urgency
     let border_color = if !has_limit {
         app.theme.muted_color()
     } else if pct >= 90 {

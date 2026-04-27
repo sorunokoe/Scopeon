@@ -56,7 +56,20 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect) {
     let is_focused = app.pane_focus == PaneFocus::Left;
     let selected = app.selected_session_idx;
-    let visible_height = (area.height.saturating_sub(3)) as usize; // subtract borders + header
+
+    // When filter is active and query is empty, reserve one line for predicate hints.
+    let show_filter_hints = app.sessions_filter_active && app.sessions_filter.is_empty();
+    let (table_area, hint_area) = if show_filter_hints && area.height > 4 {
+        let splits = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
+            .split(area);
+        (splits[0], Some(splits[1]))
+    } else {
+        (area, None)
+    };
+
+    let visible_height = (table_area.height.saturating_sub(3)) as usize; // subtract borders + header
 
     // Compute scroll offset to keep selected visible
     let scroll = if selected >= visible_height {
@@ -68,22 +81,22 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
     let header = Row::new(vec![
         Cell::from("Date/Time").style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(app.theme.heading_color())
                 .add_modifier(Modifier::BOLD),
         ),
         Cell::from("Model").style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(app.theme.heading_color())
                 .add_modifier(Modifier::BOLD),
         ),
         Cell::from("$").style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(app.theme.heading_color())
                 .add_modifier(Modifier::BOLD),
         ),
         Cell::from("Cache").style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(app.theme.heading_color())
                 .add_modifier(Modifier::BOLD),
         ),
     ]);
@@ -112,7 +125,7 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
             let base_style = if is_sel && is_focused {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else if is_sel {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(app.theme.accent_color())
             } else {
                 Style::default()
             };
@@ -134,12 +147,12 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
                 Cell::from(model).style(if is_sel && is_focused {
                     base_style
                 } else {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(app.theme.model_color())
                 }),
                 Cell::from(cost).style(if is_sel && is_focused {
                     base_style
                 } else {
-                    Style::default().fg(Color::Magenta)
+                    Style::default().fg(app.theme.cost_color())
                 }),
                 Cell::from(cache_str).style(base_style),
             ])
@@ -204,7 +217,24 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
             .title(title),
     );
 
-    f.render_widget(table, area);
+    f.render_widget(table, table_area);
+
+    // Filter predicate hint chips — shown below the table when filter is active and empty.
+    if let Some(hint_rect) = hint_area {
+        let muted = app.theme.muted_color();
+        let accent = app.theme.accent_dim();
+        let chips = vec![
+            Span::styled("  Predicates: ", Style::default().fg(muted)),
+            Span::styled("cost>5 ", Style::default().fg(accent)),
+            Span::styled("cache<40 ", Style::default().fg(accent)),
+            Span::styled("tag:feat ", Style::default().fg(accent)),
+            Span::styled("today ", Style::default().fg(accent)),
+            Span::styled("anomaly ", Style::default().fg(accent)),
+            Span::styled("model:sonnet ", Style::default().fg(accent)),
+            Span::styled(" Esc:cancel", Style::default().fg(muted)),
+        ];
+        f.render_widget(Paragraph::new(Line::from(chips)), hint_rect);
+    }
 }
 
 // ── Right panel: selected session detail ──────────────────────────────────────
@@ -297,13 +327,7 @@ fn draw_detail_header(
 
     let cache_pct = stats.cache_hit_rate * 100.0;
     let cache_bar = fill_bar(stats.cache_hit_rate, 16);
-    let cache_col = if cache_pct >= 70.0 {
-        Color::Green
-    } else if cache_pct >= 40.0 {
-        Color::Yellow
-    } else {
-        Color::Red
-    };
+    let cache_col = app.theme.cache_color(cache_pct);
 
     // IS-I: Compute shadow costs for Haiku and Sonnet comparisons.
     // Use the session model and aggregate token counts.
@@ -394,7 +418,7 @@ fn draw_detail_header(
             Span::styled("  Input:  ", Style::default().fg(app.theme.muted_color())),
             Span::styled(
                 fmt_k(stats.total_input_tokens),
-                Style::default().fg(Color::Blue),
+                Style::default().fg(app.theme.accent_dim()),
             ),
             Span::styled("   Think: ", Style::default().fg(app.theme.muted_color())),
             Span::styled(
@@ -466,7 +490,7 @@ fn draw_detail_header(
             ));
             shadow_spans.push(Span::styled(
                 format!("${:.4}", h),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(app.theme.accent_color()),
             ));
         }
         if let Some(s) = shadow_sonnet {
@@ -476,7 +500,7 @@ fn draw_detail_header(
             ));
             shadow_spans.push(Span::styled(
                 format!("${:.4}", s),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(app.theme.accent_color()),
             ));
         }
         all_lines.insert(all_lines.len() - 1, Line::from(shadow_spans));
@@ -524,7 +548,7 @@ fn draw_detail_turns(
             Row::new(vec![
                 Cell::from(t.turn_index.to_string())
                     .style(Style::default().fg(app.theme.muted_color())),
-                Cell::from(fmt_k(t.input_tokens)).style(Style::default().fg(Color::Blue)),
+                Cell::from(fmt_k(t.input_tokens)).style(Style::default().fg(app.theme.accent_dim())),
                 Cell::from(fmt_k(t.cache_read_tokens))
                     .style(Style::default().fg(app.theme.success_color())),
                 Cell::from(fmt_k(t.thinking_tokens))
@@ -680,13 +704,7 @@ fn make_turn_row<'a>(
     app: &'a App,
 ) -> Row<'a> {
     let ctx_pct = (t.input_tokens + t.cache_read_tokens) as f64 / 200_000.0 * 100.0;
-    let ctx_color = if ctx_pct >= 80.0 {
-        Color::Red
-    } else if ctx_pct >= 60.0 {
-        Color::Yellow
-    } else {
-        Color::Green
-    };
+    let ctx_color = app.theme.context_color(ctx_pct);
     let ms = t
         .duration_ms
         .map(|d| format!("{}ms", d))

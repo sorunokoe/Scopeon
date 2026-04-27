@@ -1,15 +1,16 @@
 /// Tab 6: Multi-agent subagent tree
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
+    layout::{Constraint, Direction, Layout, Rect},
     Frame,
 };
 use scopeon_core::AgentNode;
 
 use crate::app::App;
 use crate::text::{truncate_to_chars, truncate_with_ellipsis};
+use crate::theme::Theme;
 use crate::views::components::themed_block;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
@@ -70,7 +71,7 @@ fn draw_tree(f: &mut Frame, app: &App, area: Rect) {
             Line::from(Span::styled(
                 "  How subagent trees work:",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(app.theme.heading_color())
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
@@ -83,7 +84,7 @@ fn draw_tree(f: &mut Frame, app: &App, area: Rect) {
             Line::from(""),
             Line::from(Span::styled(
                 "  Run a multi-agent Claude Code task to see trees appear here.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(app.theme.muted_color()),
             )),
         ])
         .block(themed_block(app.theme, "Tree View", false));
@@ -93,28 +94,28 @@ fn draw_tree(f: &mut Frame, app: &App, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
     for root in &app.agent_roots {
-        render_node(root, "", true, &mut lines);
+        render_node(root, "", true, app.theme, &mut lines);
     }
 
     let para = Paragraph::new(lines).block(themed_block(app.theme, "Tree View", false));
     f.render_widget(para, area);
 }
 
-fn render_node<'a>(node: &'a AgentNode, prefix: &str, is_last: bool, lines: &mut Vec<Line<'a>>) {
+fn render_node<'a>(node: &'a AgentNode, prefix: &str, is_last: bool, theme: Theme, lines: &mut Vec<Line<'a>>) {
     let connector = if is_last { "└─ " } else { "├─ " };
     let cost_color = if node.total_cost_usd > 0.10 {
-        Color::Red
+        theme.error_color()
     } else if node.total_cost_usd > 0.01 {
-        Color::Yellow
+        theme.warning_color()
     } else {
-        Color::Green
+        theme.success_color()
     };
 
     let kind_label = if node.is_subagent { "sub" } else { "root" };
     let kind_color = if node.is_subagent {
-        Color::Yellow
+        theme.warning_color()
     } else {
-        Color::Cyan
+        theme.accent_color()
     };
 
     let short_id = truncate_with_ellipsis(&node.session_id, 16);
@@ -123,24 +124,24 @@ fn render_node<'a>(node: &'a AgentNode, prefix: &str, is_last: bool, lines: &mut
     lines.push(Line::from(vec![
         Span::styled(
             format!("{}{}", prefix, connector),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted_color()),
         ),
         Span::styled(
             format!("[{}] ", kind_label),
             Style::default().fg(kind_color),
         ),
-        Span::styled(short_id, Style::default().fg(Color::Cyan)),
+        Span::styled(short_id, Style::default().fg(theme.accent_color())),
         Span::styled(
             format!("  {}", node.project_name),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme.text_primary()),
         ),
         Span::styled(
             format!("  {}", short_model),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted_color()),
         ),
         Span::styled(
             format!("  {} turns", node.turn_count),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted_color()),
         ),
         Span::styled(
             format!("  ${:.4}", node.total_cost_usd),
@@ -151,7 +152,7 @@ fn render_node<'a>(node: &'a AgentNode, prefix: &str, is_last: bool, lines: &mut
     let child_prefix = format!("{}{}  ", prefix, if is_last { "   " } else { "│  " });
     for (i, child) in node.children.iter().enumerate() {
         let child_is_last = i == node.children.len() - 1;
-        render_node(child, &child_prefix, child_is_last, lines);
+        render_node(child, &child_prefix, child_is_last, theme, lines);
     }
 }
 
