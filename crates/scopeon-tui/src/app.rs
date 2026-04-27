@@ -53,38 +53,25 @@ impl SessionSort {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tab {
-    Dashboard = 0,
-    Sessions = 1,
-    Insights = 2,
-    Budget = 3,
-    Providers = 4,
-    Agents = 5,
+    Sessions = 0,
+    Spend = 1,
+    Health = 2,
 }
 
 impl Tab {
     pub fn from_index(i: usize) -> Self {
         match i {
-            0 => Tab::Dashboard,
-            1 => Tab::Sessions,
-            2 => Tab::Insights,
-            3 => Tab::Budget,
-            4 => Tab::Providers,
-            5 => Tab::Agents,
-            _ => Tab::Dashboard,
+            0 => Tab::Sessions,
+            1 => Tab::Spend,
+            2 => Tab::Health,
+            _ => Tab::Sessions,
         }
     }
     pub fn index(self) -> usize {
         self as usize
     }
     pub fn count() -> usize {
-        const TABS: &[Tab] = &[
-            Tab::Dashboard,
-            Tab::Sessions,
-            Tab::Insights,
-            Tab::Budget,
-            Tab::Providers,
-            Tab::Agents,
-        ];
+        const TABS: &[Tab] = &[Tab::Sessions, Tab::Spend, Tab::Health];
         TABS.len()
     }
 }
@@ -281,7 +268,7 @@ impl App {
         let refresh_interval = Duration::from_secs(config.general.refresh_interval_secs);
         let theme = Theme::from_name(&config.general.theme);
         App {
-            tab: Tab::Dashboard,
+            tab: Tab::Sessions,
             config,
             registry: MetricRegistry::default(),
             live_stats: None,
@@ -871,7 +858,7 @@ impl App {
         if self.session_detail_mode {
             match key {
                 // Number keys always escape detail mode and switch tabs (global navigation).
-                KeyCode::Char(c @ '1'..='6') => {
+                KeyCode::Char(c @ '1'..='3') => {
                     self.session_detail_mode = false;
                     self.turn_scroll_detail = 0;
                     self.replay_turn_idx = None;
@@ -989,32 +976,17 @@ impl App {
             },
             // Number keys always switch tabs
             KeyCode::Char('1') => {
-                self.tab = Tab::Dashboard;
-                self.pane_focus = PaneFocus::Left;
-                return;
-            },
-            KeyCode::Char('2') => {
                 self.tab = Tab::Sessions;
                 self.pane_focus = PaneFocus::Left;
                 return;
             },
+            KeyCode::Char('2') => {
+                self.tab = Tab::Spend;
+                self.pane_focus = PaneFocus::Left;
+                return;
+            },
             KeyCode::Char('3') => {
-                self.tab = Tab::Insights;
-                self.pane_focus = PaneFocus::Left;
-                return;
-            },
-            KeyCode::Char('4') => {
-                self.tab = Tab::Budget;
-                self.pane_focus = PaneFocus::Left;
-                return;
-            },
-            KeyCode::Char('5') => {
-                self.tab = Tab::Providers;
-                self.pane_focus = PaneFocus::Left;
-                return;
-            },
-            KeyCode::Char('6') => {
-                self.tab = Tab::Agents;
+                self.tab = Tab::Health;
                 self.pane_focus = PaneFocus::Left;
                 return;
             },
@@ -1048,16 +1020,6 @@ impl App {
 
         // Tab-specific keys
         match self.tab {
-            Tab::Dashboard => match key {
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.turn_scroll = self.turn_scroll.saturating_add(1)
-                },
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.turn_scroll = self.turn_scroll.saturating_sub(1)
-                },
-                KeyCode::Char('g') => self.turn_scroll = 0,
-                _ => {},
-            },
             Tab::Sessions => {
                 match key {
                     // Left pane: session selection
@@ -1105,14 +1067,12 @@ impl App {
                     },
                 }
             },
-            Tab::Insights => {},
-            Tab::Budget => match key {
+            Tab::Health => {},
+            Tab::Spend => match key {
                 KeyCode::Down | KeyCode::Char('j') => {},
                 KeyCode::Up | KeyCode::Char('k') => {},
                 _ => {},
             },
-            Tab::Providers => {},
-            Tab::Agents => {},
         }
     }
 
@@ -1342,12 +1302,9 @@ impl App {
     #[allow(clippy::type_complexity)]
     pub fn palette_items() -> Vec<(&'static str, fn(&mut App), &'static str)> {
         vec![
-            ("1 Live", |a| { a.tab = Tab::Dashboard; }, "Go to Live tab"),
-            ("2 History", |a| { a.tab = Tab::Sessions; }, "Go to History tab"),
-            ("3 Health", |a| { a.tab = Tab::Insights; }, "Go to Health tab"),
-            ("4 Spend", |a| { a.tab = Tab::Budget; }, "Go to Spend tab"),
-            ("5 Sources", |a| { a.tab = Tab::Providers; }, "Go to Sources tab"),
-            ("6 Agents", |a| { a.tab = Tab::Agents; }, "Go to Agents tab"),
+            ("1 Sessions", |a| { a.tab = Tab::Sessions; }, "Go to Sessions tab"),
+            ("2 Spend", |a| { a.tab = Tab::Spend; }, "Go to Spend tab"),
+            ("3 Health", |a| { a.tab = Tab::Health; }, "Go to Health tab"),
             ("refresh", |a| {
                 a.last_refresh = Instant::now() - a.refresh_interval;
                 a.refresh_in_progress = true;
@@ -1501,9 +1458,6 @@ impl App {
 
     fn scroll_up(&mut self) {
         match self.tab {
-            Tab::Dashboard => {
-                self.turn_scroll = self.turn_scroll.saturating_sub(1);
-            },
             Tab::Sessions if self.session_detail_mode => {
                 self.turn_scroll_detail = self.turn_scroll_detail.saturating_sub(1);
             },
@@ -1519,9 +1473,6 @@ impl App {
 
     fn scroll_down(&mut self) {
         match self.tab {
-            Tab::Dashboard => {
-                self.turn_scroll = self.turn_scroll.saturating_add(1);
-            },
             Tab::Sessions if self.session_detail_mode => {
                 self.turn_scroll_detail = self.turn_scroll_detail.saturating_add(1);
             },
@@ -1545,12 +1496,9 @@ fn tab_at_x(x: u16, active: Tab) -> Option<Tab> {
     let sep_w = 3u16; // " ┃ "
 
     let tabs: &[(&str, Tab, &str)] = &[
-        ("1", Tab::Dashboard, "Dashboard"),
-        ("2", Tab::Sessions, "Sessions"),
-        ("3", Tab::Insights, "Insights"),
-        ("4", Tab::Budget, "Budget"),
-        ("5", Tab::Providers, "Providers"),
-        ("6", Tab::Agents, "Agents"),
+        ("1", Tab::Sessions, "Sessions"),
+        ("2", Tab::Spend, "Spend"),
+        ("3", Tab::Health, "Health"),
     ];
 
     let mut cur_x = badge_w;

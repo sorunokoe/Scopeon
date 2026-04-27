@@ -1,5 +1,6 @@
-//! Tab 2: Sessions — interactive master/detail session browser.
+//! Tab 1: Sessions — live banner + interactive master/detail session browser.
 //!
+//! Top: compact live session banner when a session is active.
 //! Left panel: scrollable session list (newest first), selectable with ↑↓.
 //! Right panel: selected session detail (key stats + turn table).
 //! Enter: full-screen session detail mode.
@@ -25,6 +26,18 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         draw_session_detail_fullscreen(f, app, area);
         return;
     }
+
+    // Live session banner — compact strip at top when a session is active
+    let area = if app.is_live && area.height > 5 {
+        let v = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(area);
+        draw_live_banner(f, app, v[0]);
+        v[1]
+    } else {
+        area
+    };
 
     let sessions = app.filtered_sessions();
 
@@ -1041,4 +1054,79 @@ fn fmt_k(n: i64) -> String {
     } else {
         n.to_string()
     }
+}
+
+// ── Live session banner ───────────────────────────────────────────────────────
+
+/// Renders a compact 1-line banner at the top of the Sessions tab when a
+/// session is actively running. Shows project, branch, cost, turns, ctx%, cache%.
+fn draw_live_banner(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.theme;
+    let session = app.live_stats.as_ref().and_then(|ls| ls.session.as_ref());
+
+    let project = session
+        .map(|s| truncate_with_ellipsis(&s.project_name, 18))
+        .unwrap_or_default();
+    let branch = session
+        .filter(|s| !s.git_branch.is_empty() && s.git_branch != "—")
+        .map(|s| format!(" ⎇ {}", truncate_with_ellipsis(&s.git_branch, 10)))
+        .unwrap_or_default();
+    let model = session.map(|s| shorten_model(&s.model)).unwrap_or_default();
+
+    let cost = app.budget.daily_spent;
+    let ctx_pct = app.budget.context_pressure_pct;
+    let cache_pct = app
+        .live_stats
+        .as_ref()
+        .map(|s| s.cache_hit_rate * 100.0)
+        .unwrap_or(0.0);
+    let turns = session.map(|s| s.total_turns).unwrap_or(0);
+    let w = area.width as usize;
+
+    let base_w = 10 + project.len() + branch.len();
+
+    let mut spans: Vec<Span<'static>> = vec![
+        Span::styled(
+            "  ◉ LIVE  ".to_string(),
+            Style::default()
+                .fg(t.success_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            project.clone(),
+            Style::default()
+                .fg(t.text_primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(branch.clone(), Style::default().fg(t.warning_color())),
+    ];
+
+    if w > base_w + 15 {
+        spans.push(Span::styled(
+            format!("  ${:.3}", cost),
+            Style::default().fg(t.cost_color()),
+        ));
+        spans.push(Span::styled(
+            format!("  {}t", turns),
+            Style::default().fg(t.muted_color()),
+        ));
+    }
+    if w > base_w + 32 {
+        spans.push(Span::styled(
+            format!("  ctx {:.0}%", ctx_pct),
+            Style::default().fg(t.context_color(ctx_pct)),
+        ));
+        spans.push(Span::styled(
+            format!("  cache {:.0}%", cache_pct),
+            Style::default().fg(t.cache_color(cache_pct)),
+        ));
+    }
+    if w > base_w + 50 && !model.is_empty() {
+        spans.push(Span::styled(
+            format!("  {}", model),
+            Style::default().fg(t.model_color()),
+        ));
+    }
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }

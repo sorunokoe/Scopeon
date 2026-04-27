@@ -1,4 +1,4 @@
-/// Tab 3: Health — Health score + waste signals + visual metric bars
+/// Tab 3: Health — per-provider activity summary + health score + waste signals + visual metric bars
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -11,6 +11,7 @@ use scopeon_core::PRICING_VERIFIED_DATE;
 use scopeon_metrics::{MetricCategory, MetricValue};
 
 use crate::app::App;
+use crate::text::truncate_with_ellipsis;
 use crate::views::components::{themed_block, themed_block_borders};
 use crate::views::dashboard::health_color;
 
@@ -23,21 +24,39 @@ fn pricing_staleness_days() -> Option<i64> {
 }
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
+    // Per-provider activity summary at top (only when ≥2 providers)
+    let show_provider_summary = app.all_providers.len() >= 2;
+    let summary_h = if show_provider_summary { 2u16 } else { 0u16 };
+
     // Optionally show a 1-line pricing staleness warning at the bottom.
     let stale_days = pricing_staleness_days();
     let show_warning = stale_days.map(|d| d > 90).unwrap_or(false);
 
-    let (main_area, warning_area) = if show_warning && area.height > 4 {
-        let v = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(area);
-        (v[0], Some(v[1]))
-    } else {
-        (area, None)
-    };
+    let mut constraints: Vec<Constraint> = Vec::new();
+    if show_provider_summary {
+        constraints.push(Constraint::Length(summary_h));
+    }
+    constraints.push(Constraint::Min(0));
+    if show_warning {
+        constraints.push(Constraint::Length(1));
+    }
 
     let v = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    let mut idx = 0usize;
+
+    if show_provider_summary {
+        draw_provider_summary(f, app, v[idx]);
+        idx += 1;
+    }
+
+    let main_area = v[idx];
+    idx += 1;
+
+    let inner = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(5),  // health score gauge + breakdown
@@ -46,15 +65,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(main_area);
 
-    draw_health_gauge(f, app, v[0]);
-    draw_waste_and_suggestions(f, app, v[1]);
-    draw_metrics_visual(f, app, v[2]);
+    draw_health_gauge(f, app, inner[0]);
+    draw_waste_and_suggestions(f, app, inner[1]);
+    draw_metrics_visual(f, app, inner[2]);
 
-    if let Some(warn_area) = warning_area {
+    if show_warning {
         let days = stale_days.unwrap_or(0);
         let warning = Paragraph::new(Line::from(vec![
             Span::styled(
-                " ⚠ ",
+                " ⚠ ".to_string(),
                 Style::default()
                     .fg(app.theme.warning_color())
                     .add_modifier(Modifier::BOLD),
@@ -68,8 +87,73 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(app.theme.warning_color()),
             ),
         ]));
-        f.render_widget(warning, warn_area);
+        f.render_widget(warning, v[idx]);
     }
+}
+
+fn draw_provider_summary(f: &mut Frame, app: &App, area: Rect) {
+    // Build per-provider stats from sessions_list + session_summaries
+    let mut stats: std::collections::HashMap<String, (usize, f64)> =
+        std::collections::HashMap::new();
+    for s in &app.sessions_list {
+        if s.provider.is_empty() {
+            continue;
+        }
+        let entry = stats.entry(s.provider.clone()).or_insert((0, 0.0));
+        entry.0 += 1;
+        if let Some(sm) = app.session_summaries.get(&s.id) {
+            entry.1 += sm.cache_hit_rate;
+        }
+    }
+
+    // Cost per provider from budget data
+    let mut costs: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for (provider, _, cost) in &app.budget.cost_by_provider_model {
+        *costs.entry(provider.clone()).or_insert(0.0) += cost;
+    }
+
+    let t = app.theme;
+
+    // Title line
+    let title_line = Line::from(vec![Span::styled(
+        "  ◈ Provider Activity ".to_string(),
+        Style::default().fg(t.muted_color()),
+    )]);
+
+    // Stats line: key metrics per provider separated by bullets
+    let mut stat_spans: Vec<Span<'static>> = vec![Span::raw("  ".to_string())];
+    for (i, provider) in app.all_providers.iter().enumerate() {
+        if i > 0 {
+            stat_spans.push(Span::styled("   ·   ".to_string(), Style::default().fg(t.muted_color())));
+        }
+        let (count, cache_sum) = stats.get(provider).copied().unwrap_or((0, 0.0));
+        let avg_cache = if count > 0 { cache_sum / count as f64 * 100.0 } else { 0.0 };
+        let cost = costs.get(provider).copied().unwrap_or(0.0);
+        let pname = truncate_with_ellipsis(provider, 14);
+        stat_spans.push(Span::styled(
+            format!("◈ {}  ", pname),
+            Style::default().fg(t.heading_color()).add_modifier(Modifier::BOLD),
+        ));
+        stat_spans.push(Span::styled(
+            format!("${:.2}  ", cost),
+            Style::default().fg(t.cost_color()),
+        ));
+        stat_spans.push(Span::styled(
+            format!("{}sess  ", count),
+            Style::default().fg(t.text_secondary()),
+        ));
+        if avg_cache > 0.0 {
+            stat_spans.push(Span::styled(
+                format!("cache ~{:.0}%  ", avg_cache),
+                Style::default().fg(t.cache_color(avg_cache)),
+            ));
+        }
+    }
+
+    f.render_widget(
+        Paragraph::new(vec![title_line, Line::from(stat_spans)]),
+        area,
+    );
 }
 
 fn draw_health_gauge(f: &mut Frame, app: &App, area: Rect) {

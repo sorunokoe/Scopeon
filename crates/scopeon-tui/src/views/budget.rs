@@ -1,4 +1,4 @@
-//! Tab 4: Budget — spending tracker with period cards, projections, and breakdowns.
+//! Tab 2: Spend — spending tracker with period cards, projections, breakdowns, and provider sources.
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,6 +14,26 @@ use crate::views::components::themed_block;
 use chrono::Datelike;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
+    // On wide terminals (≥110 cols): left = budget, right = provider sources
+    let show_providers = !app.providers.is_empty() && area.width >= 110;
+    let (budget_area, providers_area) = if show_providers {
+        let h = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+            .split(area);
+        (h[0], Some(h[1]))
+    } else {
+        (area, None)
+    };
+
+    draw_budget(f, app, budget_area);
+
+    if let Some(pa) = providers_area {
+        super::providers::draw(f, app, pa);
+    }
+}
+
+fn draw_budget(f: &mut Frame, app: &App, area: Rect) {
     // Compact (< 80w): stack period cards + projection but skip sparkline column.
     // Very narrow (< 55w): period cards go vertical (one per row).
     let narrow = area.width < 55;
