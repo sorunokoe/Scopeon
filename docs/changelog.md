@@ -31,6 +31,44 @@ Scopeon follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.2] — 2026-04-27
+
+### Fixed
+
+- **Pricing bug: `claude-opus-4-7` mis-priced at $15/$75** — Anthropic's new flagship Opus 4.7
+  was falling through to the broad `claude-opus-4` prefix entry and being charged at the legacy
+  $15/$75/MTok rate instead of the correct $5/$25/MTok rate. Added an explicit `claude-opus-4-7`
+  entry before `claude-opus-4` to fix this.
+
+### Added
+
+- **Anthropic `claude-opus-4-7`** — New flagship model at $5/$25/MTok (input/output),
+  cache write $6.25/MTok, cache read $0.50/MTok. Pricing verified against
+  [anthropic.com/pricing](https://www.anthropic.com/pricing) on 2026-04-27.
+
+- **OpenAI `gpt-5`, `gpt-5-mini`, `gpt-5-nano`** — Dash-variant GPT-5 models (no decimal
+  sub-version) were not matched by any existing `gpt-5.X` prefix and fell back to Sonnet
+  pricing — badly wrong for nano ($0.05/$0.40). Pricing verified 2026-04-27:
+  - `gpt-5` (base): $1.25/$10.00/MTok, cache read $0.125/MTok
+  - `gpt-5-mini`: $0.25/$2.00/MTok, cache read $0.025/MTok
+  - `gpt-5-nano`: $0.05/$0.40/MTok, cache read $0.005/MTok
+  Entries placed after all `gpt-5.X` entries to preserve existing versioned pricing.
+
+- **Google Gemini 3 series** — Three new preview models added, pricing per
+  [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)
+  (standard ≤200k token tier, verified 2026-04-27):
+  - `gemini-3.1-pro` (preview): $2.00/$12.00/MTok, cache write $4.50/MTok, read $0.20/MTok
+  - `gemini-3-flash` (preview): $0.50/$3.00/MTok, cache write $1.00/MTok, read $0.05/MTok
+  - `gemini-3.1-flash-lite` (preview): $0.25/$1.50/MTok, cache write $1.00/MTok, read $0.025/MTok
+
+- **Context window for GPT-5 family** — All GPT-5 models (base, mini, nano, and versioned
+  `gpt-5.X`) previously fell back to the 128k default window. Added `("gpt-5", 400_000)` entry
+  so context-pressure calculations use the correct 400k window size.
+
+- **`PRICING_VERIFIED_DATE` updated** to `2026-04-27`, resetting the TUI staleness warning.
+
+---
+
 ## [0.8.1] — 2026-04-24
 
 ### Added

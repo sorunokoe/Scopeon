@@ -12,6 +12,7 @@ static CONTEXT_WINDOWS: &[(&str, i64)] = &[
     // ── Anthropic Claude ─────────────────────────────────────────────────────
     ("claude", 200_000),
     // ── OpenAI ───────────────────────────────────────────────────────────────
+    ("gpt-5", 400_000),     // GPT-5 family (base, mini, nano): 400k context window
     ("gpt-4.1", 1_047_576), // GPT-4.1 / 4.1-mini / 4.1-nano: 1M
     ("gpt-4o-mini", 128_000),
     ("gpt-4o", 128_000),
@@ -104,6 +105,25 @@ mod tests {
     fn test_gemini_limits() {
         assert_eq!(context_window_for_model("gemini-1.5-pro"), 2_000_000);
         assert_eq!(context_window_for_model("gemini-2.0-flash"), 1_000_000);
+    }
+
+    #[test]
+    fn test_gpt5_family_context_window() {
+        // All GPT-5 family models should use the 400k context window.
+        assert_eq!(context_window_for_model("gpt-5"), 400_000);
+        assert_eq!(context_window_for_model("gpt-5-mini"), 400_000);
+        assert_eq!(context_window_for_model("gpt-5-nano"), 400_000);
+        // Versioned gpt-5.X models also covered by the gpt-5 prefix.
+        assert_eq!(context_window_for_model("gpt-5.1"), 400_000);
+        assert_eq!(context_window_for_model("gpt-5.4"), 400_000);
+    }
+
+    #[test]
+    fn test_gpt5_does_not_shadow_gpt4() {
+        // gpt-4.X must not be caught by the gpt-5 entry.
+        assert_eq!(context_window_for_model("gpt-4.1"), 1_047_576);
+        assert_eq!(context_window_for_model("gpt-4.1-mini"), 1_047_576);
+        assert_eq!(context_window_for_model("gpt-4o"), 128_000);
     }
 
     #[test]
