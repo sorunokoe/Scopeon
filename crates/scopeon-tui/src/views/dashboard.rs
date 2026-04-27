@@ -18,21 +18,29 @@ use crate::views::components::{empty_state_lines, kpi_row, themed_block};
 use chrono::Datelike;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
-    // Layout: KPI strip (1 line) + main split + turn timeline strip (4 lines)
     let timeline_height = 4u16;
-    let kpi_height = 1u16;
-
-    // Compact mode: width < 80 — single column, no side-by-side split.
     let compact = area.width < 80;
 
-    let v_constraints = if area.height > kpi_height + timeline_height + 6 {
+    // C-03: Use a 3-line health hero on tall Standard terminals; 1-line KPI
+    // strip otherwise. Context bar added at bottom before the turn timeline.
+    let hero_h = if !compact && area.height >= 28 { 3u16 } else { 1u16 };
+    let ctx_bar_h = 1u16;
+
+    let v_constraints = if area.height > hero_h + ctx_bar_h + timeline_height + 6 {
         vec![
-            Constraint::Length(kpi_height),
-            Constraint::Min(0),
-            Constraint::Length(timeline_height),
+            Constraint::Length(hero_h),        // health hero or KPI strip
+            Constraint::Min(0),                // main split
+            Constraint::Length(ctx_bar_h),     // context bar (full width)
+            Constraint::Length(timeline_height), // turn timeline
         ]
-    } else if area.height > kpi_height + 6 {
-        vec![Constraint::Length(kpi_height), Constraint::Min(0)]
+    } else if area.height > hero_h + ctx_bar_h + 6 {
+        vec![
+            Constraint::Length(hero_h),
+            Constraint::Min(0),
+            Constraint::Length(ctx_bar_h),
+        ]
+    } else if area.height > hero_h + 6 {
+        vec![Constraint::Length(hero_h), Constraint::Min(0)]
     } else {
         vec![Constraint::Min(0)]
     };
@@ -42,21 +50,24 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .constraints(v_constraints.clone())
         .split(area);
 
-    let (kpi_area, main_area, timeline_area) = match v_constraints.len() {
-        3 => (Some(v[0]), v[1], Some(v[2])),
-        2 => (Some(v[0]), v[1], None),
-        _ => (None, v[0], None),
-    };
+    let idx_hero = 0usize;
+    let idx_main = if v_constraints.len() > 1 { 1 } else { 0 };
+    let idx_ctx = if v_constraints.len() >= 3 { Some(2) } else { None };
+    let idx_timeline = if v_constraints.len() == 4 { Some(3) } else { None };
 
-    if let Some(ka) = kpi_area {
-        draw_kpi_strip(f, app, ka);
+    // Hero section
+    if v_constraints.len() > 1 {
+        if hero_h >= 3 {
+            draw_health_hero(f, app, v[idx_hero]);
+        } else {
+            draw_kpi_strip(f, app, v[idx_hero]);
+        }
     }
 
+    // Main split
     if compact {
-        // Single-column: stack live pane + today pane vertically.
-        // Give live session ~40% of height, today the rest.
-        let live_h = (main_area.height * 2 / 5).max(8).min(main_area.height);
-        let today_h = main_area.height.saturating_sub(live_h);
+        let live_h = (v[idx_main].height * 2 / 5).max(8).min(v[idx_main].height);
+        let today_h = v[idx_main].height.saturating_sub(live_h);
         let vc = if today_h > 4 {
             vec![Constraint::Length(live_h), Constraint::Min(0)]
         } else {
@@ -65,7 +76,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         let cv = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vc.clone())
-            .split(main_area);
+            .split(v[idx_main]);
         if vc.len() == 2 {
             draw_live_pane(f, app, cv[0]);
             draw_today_pane(f, app, cv[1]);
@@ -73,17 +84,22 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             draw_live_pane(f, app, cv[0]);
         }
     } else {
-        // Standard: 40% left (live), 60% right (today)
         let h = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-            .split(main_area);
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(v[idx_main]);
         draw_live_pane(f, app, h[0]);
         draw_today_pane(f, app, h[1]);
     }
 
-    if let Some(ta) = timeline_area {
-        draw_turn_timeline(f, app, ta);
+    // Full-width context bar
+    if let Some(ctx_i) = idx_ctx {
+        draw_dashboard_ctx_bar(f, app, v[ctx_i]);
+    }
+
+    // Turn timeline
+    if let Some(tl_i) = idx_timeline {
+        draw_turn_timeline(f, app, v[tl_i]);
     }
 }
 
@@ -166,6 +182,161 @@ fn draw_kpi_strip(f: &mut Frame, app: &App, area: Rect) {
         chips.iter().map(|(l, v, c)| (*l, v.as_str(), *c)).collect();
 
     let line = kpi_row(&chip_refs, *t);
+    f.render_widget(Paragraph::new(line), area);
+}
+
+// ── C-03: Health Hero — 3-line health panel for tall terminals ─────────────────
+
+/// Renders a 3-line health hero section with the health score as the visual anchor.
+///
+/// ```text
+///   ⬡ 87  Excellent — Cache 74%  ·  $2.41 today ↑12%  ·  ~18 turns left
+///        ├─ Cache   ████████████████████████████░░░░  74%
+///        └─ Spend   ██████████░░░░░░░░░░░░░░░░░░░░░  $2.41 / $10.00
+/// ```
+fn draw_health_hero(f: &mut Frame, app: &App, area: Rect) {
+    let t = &app.theme;
+    let health = app.health_score;
+    let health_color = t.health_color(health);
+    let muted = t.muted_color();
+
+    let cache_pct = app
+        .live_stats
+        .as_ref()
+        .map(|s| s.cache_hit_rate * 100.0)
+        .unwrap_or(0.0);
+    let cache_color = t.cache_color(cache_pct);
+
+    let turns_str = app
+        .budget
+        .predicted_turns_remaining
+        .map(|t| format!("  ·  ~{}t left", t))
+        .unwrap_or_default();
+
+    let trend_str = if app.trend_cost_pct > 10.0 {
+        format!(" ↑{:.0}%", app.trend_cost_pct)
+    } else if app.trend_cost_pct < -10.0 {
+        format!(" ↓{:.0}%", app.trend_cost_pct.abs())
+    } else {
+        String::new()
+    };
+
+    let health_label = if health >= 90.0 {
+        "Excellent"
+    } else if health >= 75.0 {
+        "Good"
+    } else if health >= 50.0 {
+        "Degraded"
+    } else {
+        "Critical"
+    };
+
+    let bar_w = (area.width.saturating_sub(14) as usize).clamp(16, 38);
+
+    // Line 1: headline
+    let line1 = Line::from(vec![
+        Span::styled(
+            format!("  ⬡ {:.0}  ", health),
+            Style::default().fg(health_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            health_label,
+            Style::default().fg(health_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  —  ", Style::default().fg(muted)),
+        Span::styled(
+            format!("Cache {:.0}%", cache_pct),
+            Style::default().fg(cache_color),
+        ),
+        Span::styled("  ·  ", Style::default().fg(muted)),
+        Span::styled(
+            format!("${:.2} today{}", app.budget.daily_spent, trend_str),
+            Style::default().fg(t.cost_color()),
+        ),
+        Span::styled(turns_str, Style::default().fg(muted)),
+    ]);
+
+    // Line 2: Cache bar
+    let cache_filled = (cache_pct / 100.0 * bar_w as f64) as usize;
+    let cache_bar = "█".repeat(cache_filled) + &"░".repeat(bar_w - cache_filled);
+    let line2 = Line::from(vec![
+        Span::styled("     ├─ Cache  ", Style::default().fg(muted)),
+        Span::styled(cache_bar, Style::default().fg(cache_color)),
+        Span::styled(format!("  {:.0}%", cache_pct), Style::default().fg(cache_color)),
+    ]);
+
+    // Line 3: Spend bar (vs daily limit, or just as % of some reference)
+    let spend_ratio = if app.budget.daily_limit > 0.0 {
+        (app.budget.daily_spent / app.budget.daily_limit).min(1.0)
+    } else {
+        0.0
+    };
+    let spend_color = t.cost_color();
+    let spend_filled = (spend_ratio * bar_w as f64) as usize;
+    let spend_bar = "█".repeat(spend_filled) + &"░".repeat(bar_w - spend_filled);
+    let spend_right = if app.budget.daily_limit > 0.0 {
+        format!("  ${:.2} / ${:.2}", app.budget.daily_spent, app.budget.daily_limit)
+    } else {
+        format!("  ${:.2}", app.budget.daily_spent)
+    };
+    let line3 = Line::from(vec![
+        Span::styled("     └─ Spend  ", Style::default().fg(muted)),
+        Span::styled(spend_bar, Style::default().fg(spend_color)),
+        Span::styled(spend_right, Style::default().fg(spend_color)),
+    ]);
+
+    f.render_widget(Paragraph::new(vec![line1, line2, line3]), area);
+}
+
+// ── C-03: Full-width dashboard context bar ─────────────────────────────────────
+
+/// 1-line full-width context pressure bar at the dashboard bottom.
+/// In crisis (> 80%), the fill color shifts to amber/red for urgency.
+fn draw_dashboard_ctx_bar(f: &mut Frame, app: &App, area: Rect) {
+    let ctx_pct = app.budget.context_pressure_pct;
+    let ctx_color = app.theme.context_color(ctx_pct);
+    let muted = app.theme.muted_color();
+
+    let last_turn = app
+        .live_stats
+        .as_ref()
+        .and_then(|s| s.turns.last());
+    let last_used = last_turn
+        .map(|t| t.input_tokens + t.cache_read_tokens)
+        .unwrap_or(0);
+
+    let turns_str = app
+        .budget
+        .predicted_turns_remaining
+        .map(|t| format!(" ~{}t ", t))
+        .unwrap_or_default();
+
+    let urgency = if ctx_pct >= 95.0 {
+        "⚠ CRITICAL — run /compact now"
+    } else if ctx_pct >= 80.0 {
+        "⚠ Context high — consider /compact"
+    } else if ctx_pct >= 60.0 {
+        "↑ Context growing"
+    } else {
+        "✓ Context ok"
+    };
+
+    let bar_w = (area.width.saturating_sub(52) as usize).clamp(8, 40);
+    let filled = (ctx_pct / 100.0 * bar_w as f64) as usize;
+    let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
+
+    let line = Line::from(vec![
+        Span::styled("  Ctx ", Style::default().fg(muted)),
+        Span::styled(bar, Style::default().fg(ctx_color)),
+        Span::styled(
+            format!("  {:.0}%  {}K used{}", ctx_pct, fmt_k(last_used), turns_str),
+            Style::default().fg(ctx_color).add_modifier(
+                if ctx_pct >= 80.0 { Modifier::BOLD } else { Modifier::empty() },
+            ),
+        ),
+        Span::styled(urgency, Style::default().fg(ctx_color)),
+    ]);
+
     f.render_widget(Paragraph::new(line), area);
 }
 

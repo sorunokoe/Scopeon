@@ -13,7 +13,7 @@ use ratatui::{
     Frame,
 };
 
-use scopeon_core::{branch_to_tag, shadow_cost, Session, SessionStats};
+use scopeon_core::{shadow_cost, Session, SessionStats};
 
 use crate::app::{App, PaneFocus};
 use crate::text::{truncate_to_chars, truncate_with_ellipsis};
@@ -42,9 +42,16 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // C-05: Proportional list width — 38% on wide terminals, fixed 44 on narrow.
+    let list_w = if area.width >= 100 {
+        (area.width as f32 * 0.38) as u16
+    } else {
+        44u16
+    };
+
     let h = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(46), Constraint::Min(0)])
+        .constraints([Constraint::Length(list_w), Constraint::Min(0)])
         .split(area);
 
     draw_session_list(f, app, &sessions, h[0]);
@@ -52,14 +59,57 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 }
 
 // ── Left panel: session list ──────────────────────────────────────────────────
+//
+// C-05: 2-line rich rows (project + time + model / cost + turns + cache bar).
+// C-18: Provider group headers when "all providers" scope and ≥2 providers.
+
+/// Determines if we should show provider group headers.
+/// Returns true when no provider scope is set and multiple providers have data.
+fn show_provider_groups(app: &App, sessions: &[&Session]) -> bool {
+    if app.scope_provider.is_some() {
+        return false;
+    }
+    if app.all_providers.len() < 2 {
+        return false;
+    }
+    // Only group when sessions span at least 2 distinct providers.
+    let mut seen = std::collections::HashSet::new();
+    for s in sessions {
+        if !s.provider.is_empty() {
+            seen.insert(s.provider.as_str());
+        }
+        if seen.len() >= 2 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Determines if we should show model group headers.
+/// Returns true when a provider scope is set and sessions span ≥2 models.
+fn show_model_groups(app: &App, sessions: &[&Session]) -> bool {
+    if app.scope_provider.is_none() {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for s in sessions {
+        if !s.model.is_empty() {
+            seen.insert(s.model.as_str());
+        }
+        if seen.len() >= 2 {
+            return true;
+        }
+    }
+    false
+}
 
 fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect) {
     let is_focused = app.pane_focus == PaneFocus::Left;
     let selected = app.selected_session_idx;
 
-    // When filter is active and query is empty, reserve one line for predicate hints.
+    // Reserve one line for predicate hint chips when filter is active and empty.
     let show_filter_hints = app.sessions_filter_active && app.sessions_filter.is_empty();
-    let (table_area, hint_area) = if show_filter_hints && area.height > 4 {
+    let (list_area, hint_area) = if show_filter_hints && area.height > 4 {
         let splits = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -69,103 +119,254 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
         (area, None)
     };
 
-    let visible_height = (table_area.height.saturating_sub(3)) as usize; // subtract borders + header
+    let inner_w = list_area.width.saturating_sub(2) as usize; // subtract borders
+    let visible_lines = list_area.height.saturating_sub(2) as usize; // subtract borders
 
-    // Compute scroll offset to keep selected visible
-    let scroll = if selected >= visible_height {
-        selected - visible_height + 1
+    let do_provider_groups = show_provider_groups(app, sessions);
+    let do_model_groups = show_model_groups(app, sessions);
+
+    // ── Build visual rows ─────────────────────────────────────────────────────
+    // Each entry: (lines for rendering, Option<session_idx>)
+    // - None = group header (1 line, non-selectable)
+    // - Some(i) = session row (2 lines)
+
+    struct VisualEntry {
+        lines: Vec<Line<'static>>,
+        session_idx: Option<usize>, // None = group header
+    }
+
+    let mut entries: Vec<VisualEntry> = Vec::new();
+    let mut last_group_key = String::new();
+
+    // Pre-compute group totals for headers.
+    let mut group_costs: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut group_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    for s in sessions.iter() {
+        let key = if do_provider_groups {
+            s.provider.clone()
+        } else if do_model_groups {
+            s.model.clone()
+        } else {
+            String::new()
+        };
+        if !key.is_empty() {
+            *group_counts.entry(key.clone()).or_insert(0) += 1;
+            if let Some(sm) = app.session_summaries.get(&s.id) {
+                *group_costs.entry(key).or_insert(0.0) += sm.estimated_cost_usd;
+            }
+        }
+    }
+
+    for (sess_idx, s) in sessions.iter().enumerate() {
+        let group_key = if do_provider_groups {
+            s.provider.clone()
+        } else if do_model_groups {
+            shorten_model(&s.model)
+        } else {
+            String::new()
+        };
+
+        // Insert group header when group key changes.
+        if (do_provider_groups || do_model_groups) && group_key != last_group_key {
+            let cost = group_costs.get(&group_key).copied().unwrap_or(0.0);
+            let count = group_counts.get(&group_key).copied().unwrap_or(0);
+            let label = group_key.clone();
+            let label_short = truncate_with_ellipsis(&label, inner_w.saturating_sub(22));
+            let dashes = "─".repeat(
+                inner_w
+                    .saturating_sub(label_short.chars().count() + 20)
+                    .min(inner_w),
+            );
+            let header_line = Line::from(vec![
+                Span::styled(
+                    format!(" ── {} ", label_short),
+                    Style::default()
+                        .fg(app.theme.heading_color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(dashes, Style::default().fg(app.theme.muted_color())),
+                Span::styled(
+                    format!(" {}s", count),
+                    Style::default().fg(app.theme.text_secondary()),
+                ),
+                if cost > 0.0 {
+                    Span::styled(
+                        format!("  ${:.2}", cost),
+                        Style::default().fg(app.theme.cost_color()),
+                    )
+                } else {
+                    Span::raw("")
+                },
+            ]);
+            entries.push(VisualEntry {
+                lines: vec![header_line],
+                session_idx: None,
+            });
+            last_group_key = group_key;
+        }
+
+        // Build the 2-line session entry.
+        let is_sel = sess_idx == selected;
+        let sel_style = if is_sel && is_focused {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else if is_sel {
+            Style::default().fg(app.theme.accent_color()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let muted_style = if is_sel && is_focused {
+            sel_style
+        } else {
+            Style::default().fg(app.theme.muted_color())
+        };
+
+        let summary = app.session_summaries.get(&s.id);
+        let cost_str = match summary {
+            Some(sm) if sm.estimated_cost_usd > 0.0 => {
+                format!("${:.3}", sm.estimated_cost_usd)
+            }
+            _ => "—".to_string(),
+        };
+        let cache_pct = summary.map(|sm| sm.cache_hit_rate * 100.0).unwrap_or(0.0);
+        let cache_str = if cache_pct > 0.0 {
+            format!("{:.0}%", cache_pct)
+        } else {
+            "—".to_string()
+        };
+        let bar_w = 8usize;
+        let cache_bar = fill_bar(cache_pct / 100.0, bar_w);
+        let cache_color = if is_sel && is_focused {
+            app.theme.accent_color()
+        } else {
+            app.theme.cache_color(cache_pct)
+        };
+
+        let model_short = shorten_model(&s.model);
+        let branch_str = if !s.git_branch.is_empty() && s.git_branch != "—" {
+            format!(" ⎇ {}", truncate_with_ellipsis(&s.git_branch, 12))
+        } else {
+            String::new()
+        };
+        let time_ago = session_time_ago(s.started_at);
+        let proj_w = inner_w
+            .saturating_sub(branch_str.chars().count() + time_ago.chars().count() + model_short.chars().count() + 6)
+            .clamp(6, 24);
+        let proj_short = truncate_with_ellipsis(&s.project_name, proj_w);
+
+        let sel_dot = if app.is_live
+            && app.live_stats.as_ref().and_then(|ls| ls.session.as_ref()).map(|ls| ls.id == s.id).unwrap_or(false)
+        {
+            "◉"
+        } else {
+            "●"
+        };
+
+        // Line 1: ● project ⎇ branch  time  model
+        let line1 = Line::from(vec![
+            Span::styled(
+                format!(" {} ", sel_dot),
+                Style::default().fg(if is_sel && !is_focused {
+                    app.theme.accent_color()
+                } else if app.is_live {
+                    app.theme.success_color()
+                } else {
+                    app.theme.muted_color()
+                }),
+            ),
+            Span::styled(
+                proj_short,
+                Style::default()
+                    .fg(app.theme.text_primary())
+                    .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() }),
+            ),
+            Span::styled(branch_str, Style::default().fg(app.theme.warning_color())),
+            Span::styled(
+                format!("  {}  ", time_ago),
+                muted_style,
+            ),
+            Span::styled(
+                model_short,
+                Style::default().fg(app.theme.model_color()),
+            ),
+        ]);
+
+        // Line 2:   $cost  ·  Nt  ·  Cache X% bar
+        let turns_str = format!("{}t", s.total_turns);
+        let line2 = Line::from(vec![
+            Span::styled("   ", Style::default()),
+            Span::styled(
+                format!("{:<7}", cost_str),
+                Style::default().fg(app.theme.cost_color()),
+            ),
+            Span::styled(" · ", muted_style),
+            Span::styled(
+                format!("{:>4}", turns_str),
+                muted_style,
+            ),
+            Span::styled(" · ", muted_style),
+            Span::styled(
+                format!("Cache {:>4} ", cache_str),
+                muted_style,
+            ),
+            Span::styled(cache_bar, Style::default().fg(cache_color)),
+        ]);
+
+        // When selected, apply reversed style across the entry lines.
+        let (final_l1, final_l2) = if is_sel && is_focused {
+            // Render as a styled background rectangle by wrapping in a single full-width span.
+            let w = inner_w;
+            fn pad_line(l: Line<'static>, w: usize) -> Line<'static> {
+                let content: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                let pad = w.saturating_sub(content.chars().count());
+                let mut spans = l.spans;
+                spans.push(Span::styled(
+                    " ".repeat(pad),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ));
+                // Re-apply REVERSED to all spans
+                let spans: Vec<Span<'static>> = spans
+                    .into_iter()
+                    .map(|s| Span::styled(s.content.into_owned(), s.style.add_modifier(Modifier::REVERSED)))
+                    .collect();
+                Line::from(spans)
+            }
+            (pad_line(line1, w), pad_line(line2, w))
+        } else {
+            (line1, line2)
+        };
+
+        entries.push(VisualEntry {
+            lines: vec![final_l1, final_l2],
+            session_idx: Some(sess_idx),
+        });
+    }
+
+    // ── Compute scroll offset so the selected session's lines are visible ─────
+    // Map session index → visual line start (counting all lines including headers).
+    let mut visual_line = 0usize;
+    let mut sel_visual_start = 0usize;
+    for entry in &entries {
+        if entry.session_idx == Some(selected) {
+            sel_visual_start = visual_line;
+        }
+        visual_line += entry.lines.len();
+    }
+
+    // Scroll so selected session is at the bottom of the visible area.
+    let scroll: u16 = if sel_visual_start + 2 > visible_lines {
+        (sel_visual_start + 2 - visible_lines) as u16
     } else {
         0
     };
 
-    let header = Row::new(vec![
-        Cell::from("Date/Time").style(
-            Style::default()
-                .fg(app.theme.heading_color())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Model").style(
-            Style::default()
-                .fg(app.theme.heading_color())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("$").style(
-            Style::default()
-                .fg(app.theme.heading_color())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Cache").style(
-            Style::default()
-                .fg(app.theme.heading_color())
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
-
-    let rows: Vec<Row> = sessions
-        .iter()
-        .enumerate()
-        .skip(scroll)
-        .map(|(i, s)| {
-            let is_sel = i == selected;
-
-            let date = format_session_date(s.started_at);
-            let model = shorten_model(&s.model);
-
-            // Use pre-computed summary from the batch query (no per-session DB round-trips)
-            let summary = app.session_summaries.get(&s.id);
-            let cost = match summary {
-                Some(sm) if sm.estimated_cost_usd > 0.0 => format!("${:.3}", sm.estimated_cost_usd),
-                _ => "—".to_string(),
-            };
-            let cache_str = match summary {
-                Some(sm) if sm.cache_hit_rate > 0.0 => format!("{:.0}%", sm.cache_hit_rate * 100.0),
-                _ => "—".to_string(),
-            };
-
-            let base_style = if is_sel && is_focused {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else if is_sel {
-                Style::default().fg(app.theme.accent_color())
-            } else {
-                Style::default()
-            };
-
-            let project_branch = if s.git_branch.is_empty() || s.git_branch == "—" {
-                s.project_name.clone()
-            } else {
-                format!("{}/{}", s.project_name, s.git_branch)
-            };
-            // Append auto-derived task-type tag from the branch prefix (e.g. feat/ → [feature])
-            let tag_suffix = branch_to_tag(&s.git_branch)
-                .map(|t| format!(" [{}]", t))
-                .unwrap_or_default();
-            let project_branch = format!("{}{}", project_branch, tag_suffix);
-            let pb_short = truncate_with_ellipsis(&project_branch, 20);
-
-            Row::new(vec![
-                Cell::from(format!("{}\n{}", date, pb_short)).style(base_style),
-                Cell::from(model).style(if is_sel && is_focused {
-                    base_style
-                } else {
-                    Style::default().fg(app.theme.model_color())
-                }),
-                Cell::from(cost).style(if is_sel && is_focused {
-                    base_style
-                } else {
-                    Style::default().fg(app.theme.cost_color())
-                }),
-                Cell::from(cache_str).style(base_style),
-            ])
-            .height(2)
-        })
+    // Flatten all entries into a single Vec<Line> for the Paragraph.
+    let all_lines: Vec<Line<'static>> = entries
+        .into_iter()
+        .flat_map(|e| e.lines)
         .collect();
 
-    let border_style = if is_focused {
-        app.theme.active_border_style()
-    } else {
-        app.theme.inactive_border_style()
-    };
-
+    // ── Block title ───────────────────────────────────────────────────────────
     let filter_suffix = if app.sessions_filter_active {
         if let Some(err) = &app.sessions_filter_error {
             format!("  /{} ⚠ {}", app.sessions_filter, err)
@@ -180,46 +381,39 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
 
     let sort_label = app.sessions_sort.label();
     let total = app.sessions_list.len();
-    // MINOR-14: Show truncation indicator when the list is at its cap.
     let count_str = if sessions.len() != total {
         format!("({} of {}) ", sessions.len(), total)
     } else if total >= 200 {
-        format!("({} — showing 200 most recent) ", total)
+        format!("({} max) ", total)
     } else {
         format!("({}) ", sessions.len())
     };
 
-    let hints = if is_focused {
-        "↑↓ · Enter:detail · /:filter · s:sort"
+    let border_style = if is_focused {
+        app.theme.active_border_style()
     } else {
-        "Tab:←"
+        app.theme.inactive_border_style()
     };
+
     let title = format!(
-        " Sessions {}{} [{}] {} ",
-        count_str, filter_suffix, sort_label, hints
+        " Sessions {}{} [{}] ",
+        count_str, filter_suffix, sort_label
     );
 
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(20),
-            Constraint::Length(14),
-            Constraint::Length(7),
-            Constraint::Min(5),
-        ],
-    )
-    .header(header)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(app.theme.border_type())
-            .border_style(border_style)
-            .title(title),
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(app.theme.border_type())
+        .border_style(border_style)
+        .title(title);
+
+    f.render_widget(
+        Paragraph::new(all_lines)
+            .block(block)
+            .scroll((scroll, 0)),
+        list_area,
     );
 
-    f.render_widget(table, table_area);
-
-    // Filter predicate hint chips — shown below the table when filter is active and empty.
+    // Filter predicate hint chips — shown below the list when filter is active and empty.
     if let Some(hint_rect) = hint_area {
         let muted = app.theme.muted_color();
         let accent = app.theme.accent_dim();
@@ -820,12 +1014,18 @@ fn draw_fullscreen_turn_table(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn format_session_date(ts_ms: i64) -> String {
-    let dt =
-        chrono::DateTime::from_timestamp_millis(ts_ms).map(|dt| dt.with_timezone(&chrono::Local));
-    match dt {
-        Some(dt) => dt.format("%m-%d %H:%M").to_string(),
-        None => "—".to_string(),
+/// Human-readable "time ago" string for session list rows.
+fn session_time_ago(ts_ms: i64) -> String {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let age_ms = (now_ms - ts_ms).max(0);
+    if age_ms < 60_000 {
+        "just now".to_string()
+    } else if age_ms < 3_600_000 {
+        format!("{}m", age_ms / 60_000)
+    } else if age_ms < 86_400_000 {
+        format!("{}h", age_ms / 3_600_000)
+    } else {
+        format!("{}d", age_ms / 86_400_000)
     }
 }
 

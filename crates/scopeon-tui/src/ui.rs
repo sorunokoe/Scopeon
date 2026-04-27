@@ -632,7 +632,13 @@ fn draw_tab_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-// ── Status bar ────────────────────────────────────────────────────────────────
+// ── C-02: Status bar — 3-zone "instrument strip" ─────────────────────────────
+//
+// Zone layout (Standard mode):
+//   [LEFT fixed ~26] [CENTER flex] [RIGHT fixed ~28]
+//   Left:   model + LIVE/IDLE badge
+//   Center: ⬡ health · $cost sparkline trend · Cache%
+//   Right:  Ctx bar + % + turns-remaining · ↻ns  (bg → amber/red at > 80%)
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
     let model = app
@@ -642,7 +648,6 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
         .map(|s| shorten_model(&s.model))
         .unwrap_or("—".to_string());
 
-    // Live / Idle / Copilot badge
     let (live_badge, live_color) = if app.is_live {
         ("◉ LIVE", app.theme.success_color())
     } else if app.copilot_active {
@@ -650,10 +655,9 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
     } else if app.live_stats.is_some() {
         ("◎ IDLE", app.theme.muted_color())
     } else {
-        ("◎ —", app.theme.muted_color())
+        ("◎  ", app.theme.muted_color())
     };
 
-    // Idle time suffix
     let idle_suffix = if !app.is_live && !app.copilot_active && app.live_stats.is_some() {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let idle_ms = app
@@ -671,59 +675,51 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
         String::new()
     };
 
-    let sep = Span::styled("  │", Style::default().fg(app.theme.muted_color()));
+    let ctx_pct = app.budget.context_pressure_pct;
+    let ctx_color = app.theme.context_color(ctx_pct);
     let muted = app.theme.muted_color();
 
-    // Compact mode: fewer items to fit narrower terminals.
+    let refresh_str = if app.refresh_in_progress {
+        format!("{}", spinner_char(app.spinner_frame))
+    } else {
+        let secs = app
+            .refresh_interval
+            .saturating_sub(app.last_refresh.elapsed())
+            .as_secs();
+        format!("↻{}s", secs)
+    };
+
+    // ── Compact mode: flat single line ──────────────────────────────────────
     if sc == SizeClass::Compact {
-        let ctx_pct = app.budget.context_pressure_pct;
-        let ctx_color = app.theme.context_color(ctx_pct);
-        let refresh_indicator = if app.refresh_in_progress {
-            format!("{} ", spinner_char(app.spinner_frame))
-        } else {
-            let secs = app
-                .refresh_interval
-                .saturating_sub(app.last_refresh.elapsed())
-                .as_secs();
-            format!("↻{}s ", secs)
-        };
         let spans = vec![
             Span::styled(
                 format!(" {} ", model),
-                Style::default()
-                    .fg(app.theme.model_color())
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(app.theme.model_color()).add_modifier(Modifier::BOLD),
             ),
             Span::styled("│", Style::default().fg(muted)),
             Span::styled(
                 format!(" {}{} ", live_badge, idle_suffix),
                 Style::default().fg(live_color),
             ),
-            sep.clone(),
+            Span::styled("│ ", Style::default().fg(muted)),
             Span::styled(
-                format!(" ${:.2} ", app.budget.daily_spent),
+                format!("${:.2} ", app.budget.daily_spent),
                 Style::default().fg(app.theme.cost_color()),
             ),
-            sep.clone(),
+            Span::styled("│ ", Style::default().fg(muted)),
             Span::styled(
-                format!(" Ctx {:.0}% ", ctx_pct),
+                format!("Ctx {:.0}% ", ctx_pct),
                 Style::default().fg(ctx_color),
             ),
-            sep.clone(),
-            Span::styled(
-                format!(" {} ", refresh_indicator),
-                Style::default().fg(muted),
-            ),
+            Span::styled("│ ", Style::default().fg(muted)),
+            Span::styled(format!("{} ", refresh_str), Style::default().fg(muted)),
         ];
-        f.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Reset)),
-            area,
-        );
+        f.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
 
-    // Standard mode: full status bar.
-    let cost_trend = if app.trend_cost_pct > 5.0 {
+    // ── Standard mode: 3-zone split ─────────────────────────────────────────
+    let cost_trend_char = if app.trend_cost_pct > 5.0 {
         "▲"
     } else if app.trend_cost_pct < -5.0 {
         "▼"
@@ -735,7 +731,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
     } else if app.trend_cost_pct < -5.0 {
         app.theme.success_color()
     } else {
-        app.theme.muted_color()
+        muted
     };
 
     let turn_costs: Vec<f64> = app
@@ -751,86 +747,102 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
         .map(|s| s.cache_hit_rate * 100.0)
         .unwrap_or(0.0);
     let cache_color = app.theme.cache_color(cache_pct);
-
-    let ctx_pct = app.budget.context_pressure_pct;
-    let ctx_color = app.theme.context_color(ctx_pct);
-    let ctx_bar = app.theme.progress_bar(ctx_pct / 100.0, 8);
-
     let health_color = app.theme.health_color(app.health_score);
 
-    let refresh_indicator = if app.refresh_in_progress {
-        format!("{} ", spinner_char(app.spinner_frame))
-    } else {
-        let secs = app
-            .refresh_interval
-            .saturating_sub(app.last_refresh.elapsed())
-            .as_secs();
-        format!("↻{}s ", secs)
-    };
-
-    let hints: String = build_hints(app);
-
-    // IS-15: Overhead transparency — show Scopeon's own memory footprint.
-    let overhead_str = get_process_rss_mb()
-        .map(|mb| format!("  [◈ {:.0}MB]", mb))
+    let ctx_bar = app.theme.progress_bar(ctx_pct / 100.0, 7);
+    let turns_remaining_str = app
+        .budget
+        .predicted_turns_remaining
+        .map(|t| format!(" ~{}t", t))
         .unwrap_or_default();
 
-    let spans = vec![
+    // Right zone background urgency signal.
+    let right_bg = if ctx_pct >= 95.0 {
+        app.theme.error_color()
+    } else if ctx_pct >= 80.0 {
+        app.theme.warning_color()
+    } else {
+        Color::Reset
+    };
+    // When background is colored, use dark text for contrast.
+    let right_fg = if ctx_pct >= 80.0 {
+        Color::Black
+    } else {
+        ctx_color
+    };
+
+    let hints = build_hints(app);
+    // The right zone is fixed width; hints go after hints separator.
+    // Width budget: ~30 for context zone, remainder for hints.
+    let right_w = 32u16;
+    let hints_w = area.width.saturating_sub(26 + right_w) as usize;
+    let hints_truncated = truncate_to_chars(&hints, hints_w);
+
+    let zones = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(26), // left: model + badge
+            Constraint::Min(0),     // center: health + cost + cache + hints
+            Constraint::Length(right_w), // right: context zone (urgency bg)
+        ])
+        .split(area);
+
+    // Left zone
+    let left_spans = vec![
         Span::styled(
-            format!(" {} ", model),
-            Style::default()
-                .fg(app.theme.model_color())
-                .add_modifier(Modifier::BOLD),
+            format!(" {} ", truncate_to_chars(&model, 14)),
+            Style::default().fg(app.theme.model_color()).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("│", Style::default().fg(app.theme.muted_color())),
+        Span::styled("│", Style::default().fg(muted)),
         Span::styled(
             format!(" {}{} ", live_badge, idle_suffix),
             Style::default().fg(live_color),
         ),
-        sep.clone(),
+    ];
+    f.render_widget(Paragraph::new(Line::from(left_spans)), zones[0]);
+
+    // Center zone: health + cost + sparkline + cache + hints
+    let center_spans = vec![
+        Span::styled("│", Style::default().fg(muted)),
         Span::styled(
-            format!(" ● {:.0} ", app.health_score),
-            Style::default()
-                .fg(health_color)
-                .add_modifier(Modifier::BOLD),
+            format!(" ⬡ {:.0} ", app.health_score),
+            Style::default().fg(health_color).add_modifier(Modifier::BOLD),
         ),
-        sep.clone(),
+        Span::styled("│ ", Style::default().fg(muted)),
         Span::styled(
-            format!(" ${:.2} {} ", app.budget.daily_spent, spark),
+            format!("${:.2} {} ", app.budget.daily_spent, spark),
             Style::default().fg(app.theme.cost_color()),
         ),
-        Span::styled(format!("{} ", cost_trend), Style::default().fg(trend_color)),
-        sep.clone(),
+        Span::styled(format!("{} ", cost_trend_char), Style::default().fg(trend_color)),
+        Span::styled("│ ", Style::default().fg(muted)),
         Span::styled(
-            format!(" Cache {:.0}% ", cache_pct),
+            format!("Cache {:.0}%  ", cache_pct),
             Style::default().fg(cache_color),
         ),
-        sep.clone(),
-        Span::styled(
-            format!(
-                " Ctx {} {:.0}%{} ",
-                ctx_bar,
-                ctx_pct,
-                app.budget
-                    .predicted_turns_remaining
-                    .map(|t| format!(" ~{}t", t))
-                    .unwrap_or_default()
-            ),
-            Style::default().fg(ctx_color),
-        ),
-        sep.clone(),
-        Span::styled(
-            format!(" {} ", refresh_indicator),
-            Style::default().fg(app.theme.muted_color()),
-        ),
-        Span::styled("│", Style::default().fg(app.theme.muted_color())),
-        Span::styled(hints, Style::default().fg(app.theme.muted_color())),
-        Span::styled(overhead_str, Style::default().fg(app.theme.muted_color())),
+        Span::styled("│", Style::default().fg(muted)),
+        Span::styled(hints_truncated, Style::default().fg(muted)),
     ];
+    f.render_widget(Paragraph::new(Line::from(center_spans)), zones[1]);
 
+    // Right zone (urgency background when context > 80%)
+    let right_style = Style::default().bg(right_bg);
+    let right_fg_muted = if ctx_pct >= 80.0 { Color::Black } else { muted };
+    let right_spans = vec![
+        Span::styled("│ ", Style::default().fg(right_fg_muted).bg(right_bg)),
+        Span::styled(
+            format!("Ctx {} {:.0}%{} ", ctx_bar, ctx_pct, turns_remaining_str),
+            Style::default().fg(right_fg).bg(right_bg).add_modifier(
+                if ctx_pct >= 80.0 { Modifier::BOLD } else { Modifier::empty() },
+            ),
+        ),
+        Span::styled(
+            format!("│ {} ", refresh_str),
+            Style::default().fg(right_fg_muted).bg(right_bg),
+        ),
+    ];
     f.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Reset)),
-        area,
+        Paragraph::new(Line::from(right_spans)).style(right_style),
+        zones[2],
     );
 }
 
@@ -1218,66 +1230,6 @@ fn shorten_model(model: &str) -> String {
         }
     }
     truncate_to_chars(model, 14)
-}
-
-/// IS-15: Read current process RSS memory in MB on macOS and Linux.
-/// Returns None when the platform or /proc are unavailable.
-fn get_process_rss_mb() -> Option<f64> {
-    // Linux: parse /proc/self/status for VmRSS
-    #[cfg(target_os = "linux")]
-    {
-        let status = std::fs::read_to_string("/proc/self/status").ok()?;
-        for line in status.lines() {
-            if let Some(rest) = line.strip_prefix("VmRSS:") {
-                let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
-                return Some(kb as f64 / 1024.0);
-            }
-        }
-        return None;
-    }
-
-    // macOS: use task_info via extern C
-    #[cfg(target_os = "macos")]
-    {
-        use std::mem;
-        #[repr(C)]
-        struct MachTaskBasicInfo {
-            virtual_size: u64,
-            resident_size: u64,
-            resident_size_max: u64,
-            user_time: [u32; 2],
-            system_time: [u32; 2],
-            policy: i32,
-            suspend_count: i32,
-        }
-        extern "C" {
-            fn mach_task_self() -> u32;
-            fn task_info(
-                task: u32,
-                flavor: u32,
-                task_info_out: *mut u8,
-                task_info_count: *mut u32,
-            ) -> i32;
-        }
-        const MACH_TASK_BASIC_INFO: u32 = 20;
-        let mut info: MachTaskBasicInfo = unsafe { mem::zeroed() };
-        let mut count = (mem::size_of::<MachTaskBasicInfo>() / mem::size_of::<u32>()) as u32;
-        let ret = unsafe {
-            task_info(
-                mach_task_self(),
-                MACH_TASK_BASIC_INFO,
-                &mut info as *mut _ as *mut u8,
-                &mut count,
-            )
-        };
-        if ret == 0 {
-            return Some(info.resident_size as f64 / 1_048_576.0);
-        }
-        return None;
-    }
-
-    #[allow(unreachable_code)]
-    None
 }
 
 /// Truncate a string to `max_chars` characters, appending "…" if truncated.
