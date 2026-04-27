@@ -2046,6 +2046,31 @@ impl Database {
         Ok(rows)
     }
 
+    /// Returns `(provider, model, total_cost)` aggregated across all turns.
+    /// Sorted by provider total DESC, then model cost DESC within each provider.
+    pub fn get_cost_by_provider_and_model(&self) -> Result<Vec<(String, String, f64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.provider,
+                    COALESCE(t.model, '(unknown)') AS model,
+                    COALESCE(SUM(t.estimated_cost_usd), 0.0) AS total_cost
+             FROM sessions s
+             JOIN turns t ON t.session_id = s.id
+             WHERE s.provider IS NOT NULL AND s.provider != ''
+             GROUP BY s.provider, model
+             ORDER BY SUM(t.estimated_cost_usd) DESC",
+        )?;
+        let rows: Vec<_> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn get_cost_by_tag(&self) -> Result<Vec<(String, f64, i64)>> {
         let mut stmt = self.conn.prepare(
             "SELECT st.tag,

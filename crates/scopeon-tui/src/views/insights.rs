@@ -261,7 +261,7 @@ fn draw_suggestions(f: &mut Frame, app: &App, area: Rect) {
         // Body: suggestion body text wrapped to card width.
         let body_w = card_inner.width.saturating_sub(2) as usize;
         let wrapped = word_wrap(&suggestion.body, body_w);
-        let body_lines: Vec<Line> = wrapped
+        let mut body_lines: Vec<Line> = wrapped
             .iter()
             .take(3)
             .map(|part| {
@@ -271,6 +271,20 @@ fn draw_suggestions(f: &mut Frame, app: &App, area: Rect) {
                 ))
             })
             .collect();
+
+        // C-06: Show actionable command hint based on suggestion id.
+        if let Some(cmd) = suggestion_action_hint(suggestion.id) {
+            body_lines.push(Line::from(vec![
+                Span::styled(" → ", Style::default().fg(app.theme.accent_dim())),
+                Span::styled(
+                    cmd,
+                    Style::default()
+                        .fg(app.theme.accent_color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+
         f.render_widget(Paragraph::new(body_lines), card_inner);
     }
 }
@@ -432,5 +446,20 @@ fn metric_to_ratio_and_color(value: &MetricValue) -> (f64, Color) {
         },
         MetricValue::Unavailable => (0.0, Color::DarkGray),
         _ => (0.5, Color::White),
+    }
+}
+
+/// Map a suggestion id to a short actionable command hint, or `None` if no hint applies.
+fn suggestion_action_hint(id: &str) -> Option<&'static str> {
+    match id {
+        "cache-warmup" => Some("/compact  — compact context to warm cache faster"),
+        "compaction-freq" => Some("/compact  — run before context exceeds 60%"),
+        "high-cache-miss" => Some("Reuse existing sessions instead of starting fresh"),
+        "no-cache" => Some("Start a longer session; cache activates after first write"),
+        "high-cost-turn" => Some("Use /clear or /compact to reset expensive context"),
+        "spike-input" => Some("Break task into smaller sub-tasks or use /clear"),
+        "hook-overhead" => Some("Review ~/.claude/hooks — remove unused or slow hooks"),
+        "no-skill" | "skill-gap" => Some("Create CLAUDE.md in project root with domain context"),
+        _ => None,
     }
 }

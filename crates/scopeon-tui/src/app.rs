@@ -128,6 +128,10 @@ pub struct BudgetState {
     /// IS-K: Cost breakdown by auto-detected task type (tag field) for the last 30 days.
     pub cost_by_tag: Vec<(String, f64, i64)>,
 
+    /// C-19: Cost breakdown by provider → model for the Spend tab tree.
+    /// Each entry: (provider, model, total_cost). Sorted by provider total then model cost.
+    pub cost_by_provider_model: Vec<(String, String, f64)>,
+
     // IS-14: Spend projection — end-of-day estimate based on current hourly rate.
     pub daily_hourly_rate: f64,   // current spend / hours elapsed today
     pub daily_projected_eod: f64, // extrapolated daily total if pace continues
@@ -250,6 +254,19 @@ pub struct App {
 
     // IS-5: Mouse state — last-clicked session list row, for single/double-click detection.
     pub mouse_last_click_row: Option<u16>,
+
+    // C-17: Provider/model scope — filters the Sessions tab list.
+    // `scope_provider` is None for "All". `scope_model` is None for "All models".
+    pub scope_provider: Option<String>,
+    pub scope_model: Option<String>,
+    /// Unique providers across all sessions (populated each refresh).
+    pub all_providers: Vec<String>,
+    /// Unique models for the currently scoped provider (or all providers when None).
+    pub all_models: Vec<String>,
+
+    // C-10: Command palette state.
+    pub command_palette_active: bool,
+    pub command_palette_query: String,
 }
 
 impl Default for App {
@@ -324,6 +341,12 @@ impl App {
             narrative_idx: 0,
             replay_turn_idx: None,
             mouse_last_click_row: None,
+            scope_provider: None,
+            scope_model: None,
+            all_providers: Vec::new(),
+            all_models: Vec::new(),
+            command_palette_active: false,
+            command_palette_query: String::new(),
         }
     }
 
@@ -540,6 +563,68 @@ impl App {
         // ── IS-K: Cost by task type (auto-tagged sessions) ────────────────────
         self.budget.cost_by_tag = db.get_cost_by_tag_days(30).unwrap_or_default();
 
+        // ── C-19: Cost by provider + model ────────────────────────────────────
+        // Sort so provider totals are descending, and within each provider models are ordered.
+        let raw_pm = db.get_cost_by_provider_and_model().unwrap_or_default();
+        // Compute per-provider totals for sort order.
+        let mut provider_totals: std::collections::HashMap<&str, f64> =
+            std::collections::HashMap::new();
+        for (p, _, c) in &raw_pm {
+            *provider_totals.entry(p.as_str()).or_default() += c;
+        }
+        let mut sorted_pm = raw_pm.clone();
+        sorted_pm.sort_by(|(pa, ma, ca), (pb, mb, cb)| {
+            let ta = provider_totals.get(pa.as_str()).copied().unwrap_or(0.0);
+            let tb = provider_totals.get(pb.as_str()).copied().unwrap_or(0.0);
+            tb.partial_cmp(&ta)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(cb.partial_cmp(ca).unwrap_or(std::cmp::Ordering::Equal))
+                .then(pa.cmp(pb))
+                .then(ma.cmp(mb))
+        });
+        self.budget.cost_by_provider_model = sorted_pm;
+
+        // ── C-17: Build available provider/model lists for scope bar ─────────
+        {
+            let mut providers: Vec<String> = self
+                .sessions_list
+                .iter()
+                .filter(|s| !s.provider.is_empty())
+                .map(|s| s.provider.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            providers.sort();
+            self.all_providers = providers;
+
+            // Models for the currently active scope (or all if no scope).
+            let scope = self.scope_provider.clone();
+            let mut models: Vec<String> = self
+                .sessions_list
+                .iter()
+                .filter(|s| scope.as_deref().map(|p| s.provider == p).unwrap_or(true))
+                .filter(|s| !s.model.is_empty())
+                .map(|s| s.model.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            models.sort();
+            self.all_models = models;
+
+            // Normalize scope: clear stale provider/model selections.
+            if let Some(ref sp) = self.scope_provider.clone() {
+                if !self.all_providers.contains(sp) {
+                    self.scope_provider = None;
+                    self.scope_model = None;
+                }
+            }
+            if let Some(ref sm) = self.scope_model.clone() {
+                if !self.all_models.contains(sm) {
+                    self.scope_model = None;
+                }
+            }
+        }
+
         // ── Context pressure alerts ───────────────────────────────────────────
         let ctx_pct = self.budget.context_pressure_pct;
         if ctx_pct >= 95.0 && self.context_alert_threshold_crossed < 2 {
@@ -716,7 +801,30 @@ impl App {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyCode, _modifiers: KeyModifiers) {
+    pub fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // C-10: Command palette — intercepts all keys when active.
+        if self.command_palette_active {
+            match key {
+                KeyCode::Esc => {
+                    self.command_palette_active = false;
+                    self.command_palette_query.clear();
+                },
+                KeyCode::Backspace => {
+                    self.command_palette_query.pop();
+                },
+                KeyCode::Enter => {
+                    self.execute_palette_command();
+                    self.command_palette_active = false;
+                    self.command_palette_query.clear();
+                },
+                KeyCode::Char(c) => {
+                    self.command_palette_query.push(c);
+                },
+                _ => {},
+            }
+            return;
+        }
+
         // Help overlay: q/Q quits, Esc just dismisses, any other key dismisses then falls through.
         if self.show_help {
             self.show_help = false;
@@ -834,6 +942,12 @@ impl App {
                 self.quit = true;
                 return;
             },
+            // C-10: Command palette — Ctrl+P
+            KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.command_palette_active = true;
+                self.command_palette_query.clear();
+                return;
+            },
             KeyCode::Char('?') => {
                 self.show_help = true;
                 return;
@@ -853,6 +967,16 @@ impl App {
                 // Manual toggle overrides auto-re-entry tracking.
                 self.zen_auto_exited = false;
                 self.zen_clear_cycles = 0;
+                return;
+            },
+            // C-17: Provider scope cycling (only on Sessions tab, when ≥2 providers exist).
+            KeyCode::Char('p') if self.tab == Tab::Sessions && self.all_providers.len() >= 2 => {
+                self.cycle_scope_provider();
+                return;
+            },
+            // C-17: Model scope cycling (only on Sessions tab, when provider scoped or models exist).
+            KeyCode::Char('m') if self.tab == Tab::Sessions && !self.all_models.is_empty() => {
+                self.cycle_scope_model();
                 return;
             },
             // Number keys always switch tabs
@@ -1022,6 +1146,18 @@ impl App {
             .sessions_list
             .iter()
             .filter(|s| {
+                // C-17: Provider/model scope filter — applies first, before text filter.
+                if let Some(ref sp) = self.scope_provider {
+                    if &s.provider != sp {
+                        return false;
+                    }
+                }
+                if let Some(ref sm) = self.scope_model {
+                    if &s.model != sm {
+                        return false;
+                    }
+                }
+
                 if filter.is_empty() {
                     return true;
                 }
@@ -1102,6 +1238,87 @@ impl App {
 
         list
     }
+
+    // C-17: Cycle through available providers (None → first → … → last → None).
+    fn cycle_scope_provider(&mut self) {
+        self.scope_model = None; // reset model when provider changes
+        if self.all_providers.is_empty() {
+            return;
+        }
+        self.scope_provider = match self.scope_provider.take() {
+            None => Some(self.all_providers[0].clone()),
+            Some(ref p) => {
+                let idx = self.all_providers.iter().position(|x| x == p);
+                match idx {
+                    Some(i) if i + 1 < self.all_providers.len() => {
+                        Some(self.all_providers[i + 1].clone())
+                    },
+                    _ => None,
+                }
+            },
+        };
+    }
+
+    // C-17: Cycle through available models for the current scope.
+    fn cycle_scope_model(&mut self) {
+        if self.all_models.is_empty() {
+            return;
+        }
+        self.scope_model = match self.scope_model.take() {
+            None => Some(self.all_models[0].clone()),
+            Some(ref m) => {
+                let idx = self.all_models.iter().position(|x| x == m);
+                match idx {
+                    Some(i) if i + 1 < self.all_models.len() => {
+                        Some(self.all_models[i + 1].clone())
+                    },
+                    _ => None,
+                }
+            },
+        };
+    }
+
+    // C-10: Execute the palette command matching the current query.
+    fn execute_palette_command(&mut self) {
+        let q = self.command_palette_query.trim().to_lowercase();
+        let items = Self::palette_items();
+        if let Some(item) = items.iter().find(|(label, _, _)| label.to_lowercase().contains(&q)) {
+            (item.1)(self);
+        }
+    }
+
+    /// Returns (label, action_fn, description) for all command palette items.
+    /// Used both for rendering and execution.
+    #[allow(clippy::type_complexity)]
+    pub fn palette_items() -> Vec<(&'static str, fn(&mut App), &'static str)> {
+        vec![
+            ("1 Live", |a| { a.tab = Tab::Dashboard; }, "Go to Live tab"),
+            ("2 History", |a| { a.tab = Tab::Sessions; }, "Go to History tab"),
+            ("3 Health", |a| { a.tab = Tab::Insights; }, "Go to Health tab"),
+            ("4 Spend", |a| { a.tab = Tab::Budget; }, "Go to Spend tab"),
+            ("5 Sources", |a| { a.tab = Tab::Providers; }, "Go to Sources tab"),
+            ("6 Agents", |a| { a.tab = Tab::Agents; }, "Go to Agents tab"),
+            ("refresh", |a| {
+                a.last_refresh = Instant::now() - a.refresh_interval;
+                a.refresh_in_progress = true;
+            }, "Force data refresh"),
+            ("zen", |a| {
+                a.zen_mode = !a.zen_mode;
+                a.zen_auto_exited = false;
+            }, "Toggle zen mode"),
+            ("filter", |a| {
+                a.tab = Tab::Sessions;
+                a.sessions_filter_active = true;
+                a.sessions_filter.clear();
+            }, "Open session filter"),
+            ("copy stats", |a| a.copy_stats_to_clipboard(), "Copy stats to clipboard"),
+            ("theme cockpit", |a| { a.theme = Theme::Cockpit; }, "Switch to Cockpit theme"),
+            ("theme standard", |a| { a.theme = Theme::Standard; }, "Switch to Standard theme"),
+            ("theme contrast", |a| { a.theme = Theme::HighContrast; }, "Switch to High Contrast theme"),
+            ("help", |a| { a.show_help = true; }, "Show help overlay"),
+        ]
+    }
+
     /// Copy a formatted summary of current stats to the system clipboard.
     /// Shows a toast notification in the status bar for 2 seconds.
     pub fn copy_stats_to_clipboard(&mut self) {
@@ -1664,6 +1881,7 @@ fn build_budget_state(
         cache_bust_drop: None,
         median_tokens_per_turn: 50_000.0,
         cost_by_tag: Vec::new(),
+        cost_by_provider_model: Vec::new(), // populated post-construction in refresh()
         // IS-14: EOD spend projection based on hours elapsed today.
         daily_hourly_rate: compute_daily_hourly_rate(daily_spent),
         daily_projected_eod: compute_daily_projected_eod(daily_spent),

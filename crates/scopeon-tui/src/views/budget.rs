@@ -2,7 +2,7 @@
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -349,12 +349,12 @@ fn draw_breakdowns_and_sparkline(f: &mut Frame, app: &App, area: Rect, compact: 
         let h = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
+                Constraint::Percentage(40),
+                Constraint::Percentage(30),
+                Constraint::Percentage(30),
             ])
             .split(area);
-        draw_model_breakdown(f, app, h[0]);
+        draw_provider_model_tree(f, app, h[0]);
         draw_project_breakdown(f, app, h[1]);
         draw_tag_breakdown(f, app, h[2]);
     } else {
@@ -366,56 +366,107 @@ fn draw_breakdowns_and_sparkline(f: &mut Frame, app: &App, area: Rect, compact: 
         let h = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
+                Constraint::Percentage(40),
+                Constraint::Percentage(30),
+                Constraint::Percentage(30),
             ])
             .split(v[0]);
 
-        draw_model_breakdown(f, app, h[0]);
+        draw_provider_model_tree(f, app, h[0]);
         draw_project_breakdown(f, app, h[1]);
         draw_tag_breakdown(f, app, h[2]);
         draw_sparkline(f, app, v[1]);
     }
 }
 
-fn draw_model_breakdown(f: &mut Frame, app: &App, area: Rect) {
-    let items = &app.budget.cost_by_model;
-    let max = items.iter().map(|(_, c)| *c).fold(0.0_f64, f64::max);
+/// C-19: Provider → Model cost breakdown tree.
+/// Shows each provider as a top-level row (bold, total cost, bar), with model
+/// sub-rows indented below it.
+fn draw_provider_model_tree(f: &mut Frame, app: &App, area: Rect) {
+    let data = &app.budget.cost_by_provider_model;
+    let muted = app.theme.muted_color();
+    let cost_color = app.theme.cost_color();
+    let model_color = app.theme.model_color();
 
-    // Compute name column width dynamically: inner width minus cost (8) + bar (12) + spacing.
+    // Build per-provider totals.
+    let mut provider_totals: std::collections::BTreeMap<&str, f64> =
+        std::collections::BTreeMap::new();
+    for (p, _, c) in data {
+        *provider_totals.entry(p.as_str()).or_default() += c;
+    }
+
+    // Sort providers by total cost descending.
+    let mut sorted_providers: Vec<(&str, f64)> = provider_totals.into_iter().collect();
+    sorted_providers.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+
+    let grand_total: f64 = sorted_providers.iter().map(|(_, c)| c).sum();
+    let max = sorted_providers.first().map(|(_, c)| *c).unwrap_or(1.0).max(1.0);
+
+    let bar_w = 8usize;
     let inner_w = area.width.saturating_sub(2) as usize;
-    let fixed = 2 + 8 + 2 + 10; // indent + cost + spacing + bar
-    let name_w = inner_w.saturating_sub(fixed).clamp(10, 28);
+    let name_w = inner_w.saturating_sub(2 + 8 + 2 + bar_w).clamp(10, 22);
 
     let mut lines: Vec<Line> = vec![];
-    for (model, cost) in items.iter().take(area.height as usize - 2) {
-        let ratio = if max > 0.0 { cost / max } else { 0.0 };
-        let bar_w = 10usize;
+    let available_rows = (area.height as usize).saturating_sub(2);
+
+    'outer: for (provider, prov_total) in &sorted_providers {
+        if lines.len() >= available_rows {
+            break;
+        }
+        let ratio = prov_total / max;
         let filled = (ratio * bar_w as f64) as usize;
         let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
-        let short = truncate_with_ellipsis(&shorten_model(model), name_w);
+        let pct = if grand_total > 0.0 { prov_total / grand_total * 100.0 } else { 0.0 };
+        let short_name = truncate_with_ellipsis(provider, name_w);
+        // Provider row — bold, full-width bar
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  {:name_w$}", short, name_w = name_w),
-                Style::default().fg(Color::White),
+                format!("  {:<name_w$}", short_name, name_w = name_w),
+                Style::default().fg(app.theme.heading_color()).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{:>8}", format!("${:.2}", cost)),
-                Style::default().fg(Color::Magenta),
+                format!("{:>7} {:>4.0}%", format!("${:.2}", prov_total), pct),
+                Style::default().fg(cost_color).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!("  {}", bar), Style::default().fg(Color::Magenta)),
+            Span::styled(format!(" {}", bar), Style::default().fg(cost_color)),
         ]));
+
+        // Model sub-rows
+        for (p2, model, model_cost) in data {
+            if p2.as_str() != *provider {
+                continue;
+            }
+            if lines.len() >= available_rows {
+                break 'outer;
+            }
+            let model_ratio = model_cost / prov_total.max(1.0);
+            let mfilled = (model_ratio * bar_w as f64) as usize;
+            let mbar = "▒".repeat(mfilled) + &"░".repeat(bar_w - mfilled);
+            let short_model = shorten_model(model);
+            let short_model = truncate_with_ellipsis(&short_model, name_w.saturating_sub(2));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   └─{:<name_w$}", short_model, name_w = name_w.saturating_sub(2)),
+                    Style::default().fg(model_color),
+                ),
+                Span::styled(
+                    format!("{:>7}     ", format!("${:.2}", model_cost)),
+                    Style::default().fg(muted),
+                ),
+                Span::styled(format!(" {}", mbar), Style::default().fg(muted)),
+            ]));
+        }
     }
+
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             "  No data yet",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(muted),
         )));
     }
 
     f.render_widget(
-        Paragraph::new(lines).block(themed_block(app.theme, "By Model", false)),
+        Paragraph::new(lines).block(themed_block(app.theme, "By Source → Model", false)),
         area,
     );
 }
@@ -438,19 +489,19 @@ fn draw_project_breakdown(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {:name_w$}", short, name_w = name_w),
-                Style::default().fg(Color::White),
+                Style::default().fg(app.theme.text_primary()),
             ),
             Span::styled(
                 format!("{:>8}", format!("${:.2}", cost)),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(app.theme.cost_color()),
             ),
-            Span::styled(format!("  {}", bar), Style::default().fg(Color::Cyan)),
+            Span::styled(format!("  {}", bar), Style::default().fg(app.theme.cost_color())),
         ]));
     }
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             "  No data yet",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.muted_color()),
         )));
     }
 
@@ -475,27 +526,27 @@ fn draw_tag_breakdown(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {:<12}", short),
-                Style::default().fg(Color::White),
+                Style::default().fg(app.theme.text_primary()),
             ),
             Span::styled(
                 format!("{:>7}", format!("${:.2}", cost)),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(app.theme.warning_color()),
             ),
             Span::styled(
                 format!(" ({:>2})", count),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(app.theme.muted_color()),
             ),
-            Span::styled(format!(" {}", bar), Style::default().fg(Color::Yellow)),
+            Span::styled(format!(" {}", bar), Style::default().fg(app.theme.warning_color())),
         ]));
     }
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             "  No tags yet",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.muted_color()),
         )));
         lines.push(Line::from(Span::styled(
-            "  scopeon tag set --session <id> feat-auth",
-            Style::default().fg(Color::DarkGray),
+            "  scopeon tag set --session <id> feat",
+            Style::default().fg(app.theme.muted_color()),
         )));
     }
 
