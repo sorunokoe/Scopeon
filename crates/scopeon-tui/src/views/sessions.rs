@@ -92,7 +92,22 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         chunk_idx += 1;
     }
 
-    draw_session_list(f, app, &sessions, chunks[chunk_idx]);
+    // Split list area horizontally on wide terminals: list (38%) | preview (62%).
+    let list_area = chunks[chunk_idx];
+    const SPLIT_THRESHOLD: u16 = 120;
+    if list_area.width >= SPLIT_THRESHOLD {
+        let horiz = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(38),
+                Constraint::Percentage(62),
+            ])
+            .split(list_area);
+        draw_session_list(f, app, &sessions, horiz[0]);
+        draw_session_preview_panel(f, app, horiz[1]);
+    } else {
+        draw_session_list(f, app, &sessions, list_area);
+    }
 }
 
 // ── Scope selector bar ────────────────────────────────────────────────────────
@@ -1538,6 +1553,277 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
         ];
         f.render_widget(Paragraph::new(Line::from(chips)), hint_rect);
     }
+}
+
+// ── Split-panel session preview (right panel) ─────────────────────────────────
+//
+// Shown when terminal width >= 120 cols. Displays full session stats for the
+// currently-selected session. Uses a compact header block plus a turns list below.
+
+fn draw_session_preview_panel(f: &mut Frame, app: &App, area: Rect) {
+    let m = app.theme.muted_color();
+    let accent = app.theme.accent_color();
+
+    // If no stats loaded yet, show a loading placeholder.
+    let Some(stats) = &app.selected_session_stats else {
+        let placeholder = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "  Select a session to preview details",
+                Style::default().fg(m),
+            )]),
+        ])
+        .block(
+            Block::default()
+                .borders(Borders::TOP | Borders::RIGHT | Borders::BOTTOM)
+                .border_type(app.theme.border_type())
+                .border_style(app.theme.inactive_border_style())
+                .title(" Session Detail "),
+        );
+        f.render_widget(placeholder, area);
+        return;
+    };
+
+    // Layout: header (7 rows max) | turns list (remaining).
+    let header_h = 7u16.min(area.height / 2);
+    let turns_h = area.height.saturating_sub(header_h);
+
+    let splits = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(header_h), Constraint::Min(turns_h)])
+        .split(area);
+
+    let border_style = Style::default().fg(app.theme.accent_dim());
+    draw_preview_header(f, app, stats, border_style, splits[0]);
+
+    if turns_h > 2 {
+        draw_preview_turns(f, app, stats, accent, splits[1]);
+    }
+}
+
+fn draw_preview_header(
+    f: &mut Frame,
+    app: &App,
+    stats: &SessionStats,
+    border_style: Style,
+    area: Rect,
+) {
+    let session = stats.session.as_ref();
+    let model = session.map(|s| s.model.as_str()).unwrap_or("—");
+    let project = session.map(|s| s.project_name.as_str()).unwrap_or("—");
+    let branch = session.map(|s| s.git_branch.as_str()).unwrap_or("—");
+    let provider = session
+        .map(|s| s.provider.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("—");
+    let provider_version = session
+        .map(|s| s.provider_version.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+
+    let cache_pct = stats.cache_hit_rate * 100.0;
+    let cache_bar = fill_bar(stats.cache_hit_rate, 14);
+    let cache_col = app.theme.cache_color(cache_pct);
+
+    let title = if !branch.is_empty() && branch != "—" {
+        format!(" {} ⎇ {} ", project, branch)
+    } else {
+        format!(" {} ", project)
+    };
+
+    let m = app.theme.muted_color();
+    let pv = if !provider_version.is_empty() {
+        format!("  {}  {}", provider, provider_version)
+    } else {
+        format!("  {}", provider)
+    };
+
+    let time_str = session
+        .map(|s| session_time_ago(s.started_at))
+        .unwrap_or_default();
+
+    let line1 = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            shorten_model(model),
+            Style::default()
+                .fg(app.theme.model_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("   ", Style::default().fg(m)),
+        Span::styled(
+            format!("${:.4}", stats.estimated_cost_usd),
+            Style::default()
+                .fg(app.theme.cost_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("   ", Style::default().fg(m)),
+        Span::styled(
+            format!("{}t", stats.total_turns),
+            Style::default().fg(app.theme.text_primary()),
+        ),
+        Span::styled(pv, Style::default().fg(m)),
+        Span::styled(format!("   {}", time_str), Style::default().fg(m)),
+    ];
+
+    let line2 = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(cache_bar, Style::default().fg(cache_col)),
+        Span::styled(
+            format!(" {:.0}%", cache_pct),
+            Style::default().fg(cache_col).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  saved ", Style::default().fg(m)),
+        Span::styled(
+            format!("${:.4}", stats.cache_savings_usd),
+            Style::default().fg(app.theme.success_color()),
+        ),
+        Span::styled("  MCP ", Style::default().fg(m)),
+        Span::styled(
+            stats.total_mcp_calls.to_string(),
+            Style::default().fg(app.theme.warning_color()),
+        ),
+    ];
+
+    let line3 = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            fmt_k(stats.total_input_tokens),
+            Style::default().fg(app.theme.accent_dim()),
+        ),
+        Span::styled(" in  ", Style::default().fg(m)),
+        Span::styled(
+            fmt_k(stats.total_output_tokens),
+            Style::default().fg(app.theme.accent_color()),
+        ),
+        Span::styled(" out", Style::default().fg(m)),
+        if stats.total_thinking_tokens > 0 {
+            Span::styled(
+                format!("  {} think", fmt_k(stats.total_thinking_tokens)),
+                Style::default().fg(app.theme.cost_color()),
+            )
+        } else {
+            Span::styled("", Style::default())
+        },
+    ];
+
+    let hint = Line::from(vec![Span::styled(
+        "  Enter: fullscreen  ·  ↑↓: scroll list",
+        Style::default().fg(m),
+    )]);
+
+    let lines = vec![
+        Line::from(line1),
+        Line::from(line2),
+        Line::from(line3),
+        hint,
+    ];
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::TOP | Borders::RIGHT | Borders::BOTTOM)
+                .border_type(app.theme.border_type())
+                .border_style(border_style)
+                .title(title),
+        ),
+        area,
+    );
+}
+
+fn draw_preview_turns(
+    f: &mut Frame,
+    app: &App,
+    stats: &SessionStats,
+    accent: Color,
+    area: Rect,
+) {
+    let m = app.theme.muted_color();
+    let border_style = app.theme.inactive_border_style();
+
+    let visible = area.height.saturating_sub(3) as usize;
+    let total = stats.turns.len();
+    let scroll = app.turn_scroll_detail;
+
+    let hdr_style = Style::default()
+        .fg(app.theme.heading_color())
+        .add_modifier(Modifier::BOLD);
+
+    let header = Row::new(vec![
+        Cell::from("#").style(hdr_style),
+        Cell::from("Cost").style(hdr_style),
+        Cell::from("Cache%").style(hdr_style),
+        Cell::from("In").style(hdr_style),
+        Cell::from("Out").style(hdr_style),
+        Cell::from("MCP").style(hdr_style),
+        Cell::from("ms").style(hdr_style),
+    ]);
+
+    let rows: Vec<Row> = stats
+        .turns
+        .iter()
+        .rev()
+        .skip(scroll)
+        .take(visible)
+        .map(|t| {
+            let cache_pct = if t.input_tokens + t.cache_read_tokens > 0 {
+                t.cache_read_tokens as f64
+                    / (t.input_tokens + t.cache_read_tokens) as f64
+                    * 100.0
+            } else {
+                0.0
+            };
+            let cache_col = app.theme.cache_color(cache_pct);
+            let ms = t
+                .duration_ms
+                .map(|d| format!("{}ms", d))
+                .unwrap_or_else(|| "—".into());
+            Row::new(vec![
+                Cell::from(t.turn_index.to_string()).style(Style::default().fg(m)),
+                Cell::from(format!("${:.4}", t.estimated_cost_usd))
+                    .style(Style::default().fg(app.theme.cost_color())),
+                Cell::from(format!("{:.0}%", cache_pct)).style(Style::default().fg(cache_col)),
+                Cell::from(fmt_k(t.input_tokens)).style(Style::default().fg(app.theme.accent_dim())),
+                Cell::from(fmt_k(t.output_tokens)).style(Style::default().fg(accent)),
+                Cell::from(t.mcp_call_count.to_string())
+                    .style(Style::default().fg(app.theme.warning_color())),
+                Cell::from(ms).style(Style::default().fg(m)),
+            ])
+        })
+        .collect();
+
+    let scroll_hint = if total > visible {
+        format!(
+            " Recent Turns (showing {}/{}) ",
+            (scroll + visible).min(total),
+            total
+        )
+    } else {
+        format!(" All Turns ({}) ", total)
+    };
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(4),
+            Constraint::Length(8),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(4),
+            Constraint::Length(7),
+        ],
+    )
+    .header(header)
+    .block(
+        Block::default()
+            .borders(Borders::RIGHT | Borders::BOTTOM)
+            .border_type(app.theme.border_type())
+            .border_style(border_style)
+            .title(scroll_hint),
+    );
+
+    f.render_widget(table, area);
 }
 
 // ── Full-screen detail mode (Enter key) ──────────────────────────────────────

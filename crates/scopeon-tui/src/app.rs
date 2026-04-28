@@ -242,6 +242,8 @@ pub struct App {
     /// Last known terminal height — updated each render tick so mouse hit-testing
     /// can compute the correct session-list body row offset.
     pub terminal_height: u16,
+    /// Last known terminal width — used to gate split-panel preview to the left column.
+    pub terminal_width: u16,
 
     // C-17: Provider/model scope — filters the Sessions tab list.
     // `scope_provider` is None for "All". `scope_model` is None for "All models".
@@ -330,6 +332,7 @@ impl App {
             replay_turn_idx: None,
             mouse_last_click_row: None,
             terminal_height: 24,
+            terminal_width: 220,
             scope_provider: None,
             scope_model: None,
             all_providers: Vec::new(),
@@ -1395,6 +1398,18 @@ impl App {
                 if self.tab == Tab::Sessions
                     && !self.session_detail_mode =>
             {
+                // Gate clicks to the left (session list) panel.
+                // When the terminal is wide enough for split-panel, right panel
+                // starts at ~38% of the terminal width.
+                let split_threshold = 120u16;
+                let list_panel_w = if self.terminal_width >= split_threshold {
+                    (self.terminal_width as f32 * 0.38) as u16
+                } else {
+                    self.terminal_width
+                };
+                if column >= list_panel_w {
+                    // Click landed in the detail preview panel — ignore for selection.
+                } else {
                 // Compute where the session list body starts:
                 //   row 0       = tab bar
                 //   row 1       = alert banner (0 or 1 line)
@@ -1437,6 +1452,7 @@ impl App {
                         self.mouse_last_click_row = Some(row);
                     }
                 }
+                } // end left-panel gate
             },
             // Scroll wheel — delegate to view-specific scroll
             MouseEventKind::ScrollUp => self.scroll_up(),
@@ -2116,6 +2132,7 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
     loop {
         if let Ok(size) = terminal.size() {
             app.terminal_height = size.height;
+            app.terminal_width = size.width;
         }
         terminal.draw(|f| draw(f, &app))?;
 
