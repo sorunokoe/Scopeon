@@ -35,7 +35,7 @@ pub use cost::{
 pub use db::{Database, COMPACTION_MIN_PREV_TOKENS};
 pub use models::{
     fnv1a_64, AgentNode, DailyRollup, GlobalStats, InteractionEvent, ProjectStats,
-    ProviderCapability, Session, SessionAnomaly, SessionStats, SessionSummary, TaskRun, ToolCall,
+    ProviderCapability, Session, SessionAnomaly, SessionStats, SessionSummary, TaskRun, ToolBreakdownItem, ToolCall,
     ToolStat, Turn,
 };
 pub use provenance::{derive_hook_effects, interaction_token_total, provider_capabilities};

@@ -2051,12 +2051,12 @@ impl Database {
     pub fn get_cost_by_provider_and_model(&self) -> Result<Vec<(String, String, f64)>> {
         let mut stmt = self.conn.prepare(
             "SELECT s.provider,
-                    COALESCE(t.model, '(unknown)') AS model,
+                    COALESCE(t.model, '(unknown)') AS tmodel,
                     COALESCE(SUM(t.estimated_cost_usd), 0.0) AS total_cost
              FROM sessions s
              JOIN turns t ON t.session_id = s.id
              WHERE s.provider IS NOT NULL AND s.provider != ''
-             GROUP BY s.provider, model
+             GROUP BY s.provider, tmodel
              ORDER BY SUM(t.estimated_cost_usd) DESC",
         )?;
         let rows: Vec<_> = stmt
@@ -2066,6 +2066,32 @@ impl Database {
                     row.get::<_, String>(1)?,
                     row.get::<_, f64>(2)?,
                 ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Per-session breakdown of interaction events by kind, MCP server, and tool/name.
+    /// Used to display the "MCP & Skills" section in session detail and preview panels.
+    pub fn get_session_tool_breakdown(&self, session_id: &str) -> Result<Vec<ToolBreakdownItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind,
+                    COALESCE(mcp_server, '') AS server,
+                    COALESCE(mcp_tool, name, '') AS iname,
+                    COUNT(*) AS cnt
+             FROM interaction_events
+             WHERE session_id = ?1
+             GROUP BY kind, server, iname
+             ORDER BY kind, cnt DESC",
+        )?;
+        let rows = stmt
+            .query_map([session_id], |row| {
+                Ok(ToolBreakdownItem {
+                    kind: row.get(0)?,
+                    server: row.get(1)?,
+                    name: row.get(2)?,
+                    count: row.get(3)?,
+                })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)

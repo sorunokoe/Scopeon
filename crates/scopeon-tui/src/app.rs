@@ -16,7 +16,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use chrono::{Datelike, Timelike};
 use scopeon_core::{
     AgentNode, Database, GlobalStats, InteractionEvent, ProjectStats, Session, SessionAnomaly,
-    SessionStats, SessionSummary, TaskRun, ToolCall, ToolStat, UserConfig,
+    SessionStats, SessionSummary, TaskRun, ToolBreakdownItem, ToolCall, ToolStat, UserConfig,
 };
 use scopeon_metrics::{
     compute_health_score_with_breakdown, MetricCategory, MetricRegistry, MetricValue, Suggestion,
@@ -79,6 +79,33 @@ impl Tab {
 pub enum PaneFocus {
     Left,
     Right,
+}
+
+/// Which section is active in the full-screen session detail view.
+/// Cycled with the Tab key.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum DetailSection {
+    #[default]
+    Turns,
+    Context,
+    McpSkills,
+}
+
+impl DetailSection {
+    pub fn next(self) -> Self {
+        match self {
+            DetailSection::Turns => DetailSection::Context,
+            DetailSection::Context => DetailSection::McpSkills,
+            DetailSection::McpSkills => DetailSection::Turns,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            DetailSection::Turns => "Turns",
+            DetailSection::Context => "Context",
+            DetailSection::McpSkills => "MCP & Skills",
+        }
+    }
 }
 
 /// Budget spending state computed each refresh cycle.
@@ -257,6 +284,14 @@ pub struct App {
     // C-10: Command palette state.
     pub command_palette_active: bool,
     pub command_palette_query: String,
+
+    /// Active section in full-screen session detail (cycled with Tab).
+    pub detail_section: DetailSection,
+    /// Tool/MCP/skills breakdown for the currently selected session.
+    /// Cleared when selected session changes; loaded in refresh().
+    pub selected_session_tools: Option<Vec<ToolBreakdownItem>>,
+    /// Whether to show the Trends BarChart instead of KPI cards (toggled with `t`).
+    pub show_trends: bool,
 }
 
 impl Default for App {
@@ -339,6 +374,9 @@ impl App {
             all_models: Vec::new(),
             command_palette_active: false,
             command_palette_query: String::new(),
+            detail_section: DetailSection::Turns,
+            selected_session_tools: None,
+            show_trends: false,
         }
     }
 
@@ -418,6 +456,9 @@ impl App {
                 != Some(sel_id)
             {
                 self.selected_session_stats = db.get_session_stats(sel_id).ok();
+                // Also reload tool breakdown whenever stats change.
+                self.selected_session_tools =
+                    db.get_session_tool_breakdown(sel_id).ok().filter(|v| !v.is_empty());
             }
             self.selected_session_interaction_events = db
                 .list_interaction_events_for_session(sel_id, 10_000)
@@ -426,6 +467,7 @@ impl App {
                 db.list_task_runs_for_session(sel_id).unwrap_or_default();
         } else {
             self.selected_session_stats = None;
+            self.selected_session_tools = None;
             self.selected_session_interaction_events.clear();
             self.selected_session_task_runs.clear();
         }
@@ -878,6 +920,12 @@ impl App {
                     self.session_detail_mode = false;
                     self.turn_scroll_detail = 0;
                     self.replay_turn_idx = None;
+                    self.detail_section = DetailSection::Turns;
+                },
+                // Tab cycles between Turns / Context / MCP & Skills sections
+                KeyCode::Tab => {
+                    self.detail_section = self.detail_section.next();
+                    self.turn_scroll_detail = 0;
                 },
                 KeyCode::Down | KeyCode::Char('j') => {
                     self.turn_scroll_detail = self.turn_scroll_detail.saturating_add(1);
@@ -1048,6 +1096,10 @@ impl App {
                         self.scope_provider = None;
                         self.scope_model = None;
                     },
+                    // Toggle Trends chart vs KPI cards
+                    KeyCode::Char('t') => {
+                        self.show_trends = !self.show_trends;
+                    },
                     _ => {},
                 }
             },
@@ -1071,6 +1123,7 @@ impl App {
         }
         // Trigger stats reload next refresh by clearing cached session
         self.selected_session_stats = None;
+        self.selected_session_tools = None;
     }
 
     fn select_session_abs(&mut self, idx: usize) {
@@ -1080,6 +1133,7 @@ impl App {
         }
         self.selected_session_idx = idx.min(len - 1);
         self.selected_session_stats = None;
+        self.selected_session_tools = None;
     }
 
     /// Returns sessions matching the current filter, ordered by `sessions_sort`.

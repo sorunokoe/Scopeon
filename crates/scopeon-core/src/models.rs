@@ -250,6 +250,19 @@ pub struct SessionAnomaly {
     pub had_compaction: bool,
 }
 
+/// One row of the per-session tool/MCP/skill breakdown.
+/// Aggregated from `interaction_events` grouped by kind + server + name.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ToolBreakdownItem {
+    /// Event kind: "mcp" | "tool" | "skill" | "hook" | "subagent" | "compaction" | other
+    pub kind: String,
+    /// MCP server name for kind="mcp", empty string otherwise.
+    pub server: String,
+    /// MCP tool name (kind="mcp"), tool/skill/hook name (other kinds).
+    pub name: String,
+    pub count: i64,
+}
+
 /// A node in the multi-agent subagent tree. Each node represents one session;
 /// children are sessions spawned as subagents from this session.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

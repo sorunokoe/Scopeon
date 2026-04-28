@@ -4,6 +4,7 @@
 //! Below: scrollable session list (newest first), selectable with ↑↓.
 //! Enter: full-screen session detail (turns table + compact header).
 //! /: filter sessions. s: cycle sort order. []: provider scope. {}: model scope.
+//! t: toggle Trends chart. Tab (in detail): cycle Turns / Context / MCP & Skills.
 
 use std::collections::HashMap;
 
@@ -11,15 +12,15 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Bar, BarChart, BarGroup, Block, Borders, Cell, Paragraph, Row, Table},
     Frame,
 };
 
-use scopeon_core::{context_window_for_model, shadow_cost, Session, SessionStats};
+use scopeon_core::{context_window_for_model, shadow_cost, Session, SessionStats, ToolBreakdownItem};
 
-use crate::app::App;
+use crate::app::{App, DetailSection};
 use crate::text::{truncate_to_chars, truncate_with_ellipsis};
-use crate::views::components::{empty_state_lines, themed_block, themed_block_borders};
+use crate::views::components::{empty_state_lines, micro_sparkline, themed_block, themed_block_borders};
 
 /// Returns the number of rows the scope selector bar will occupy.
 /// 0 when fewer than 2 providers (nothing to select), 1 for providers-only,
@@ -944,7 +945,13 @@ fn draw_overview_cards(f: &mut Frame, app: &App, area: Rect) {
         (Some(p), None) => {
             draw_provider_dashboard(f, app, area, p.as_str());
         },
-        _ => draw_global_cards(f, app, area),
+        _ => {
+            if app.show_trends {
+                draw_trends_section(f, app, area);
+            } else {
+                draw_global_cards(f, app, area);
+            }
+        },
     }
 }
 
@@ -1073,6 +1080,24 @@ fn draw_today_card(f: &mut Frame, app: &App, area: Rect) {
             )]));
         }
 
+        // 14-day spend sparkline (newest right)
+        let spark_vals: Vec<f64> = {
+            let daily = &app.global_stats.as_ref().map(|g| g.daily.clone()).unwrap_or_default();
+            let mut v: Vec<f64> = daily.iter().rev().take(14).map(|d| d.estimated_cost_usd).collect();
+            v.reverse();
+            v
+        };
+        if !spark_vals.is_empty() {
+            let spark_w = area.width.saturating_sub(4) as usize;
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    micro_sparkline(&spark_vals, spark_w),
+                    Style::default().fg(t.cost_color()),
+                ),
+            ]));
+        }
+
         f.render_widget(
             Paragraph::new(lines).block(themed_block(t, "Today", false)),
             area,
@@ -1129,6 +1154,24 @@ fn draw_today_card(f: &mut Frame, app: &App, area: Rect) {
                 format!("  {}", trend),
                 Style::default().fg(trend_col),
             )));
+        }
+
+        // 14-day spend sparkline
+        let spark_vals: Vec<f64> = {
+            let daily = &app.global_stats.as_ref().map(|g| g.daily.clone()).unwrap_or_default();
+            let mut v: Vec<f64> = daily.iter().rev().take(14).map(|d| d.estimated_cost_usd).collect();
+            v.reverse();
+            v
+        };
+        if !spark_vals.is_empty() {
+            let spark_w = area.width.saturating_sub(4) as usize;
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    micro_sparkline(&spark_vals, spark_w),
+                    Style::default().fg(t.cost_color()),
+                ),
+            ]));
         }
 
         f.render_widget(
@@ -1584,13 +1627,29 @@ fn draw_session_preview_panel(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    // Layout: header (7 rows max) | turns list (remaining).
-    let header_h = 7u16.min(area.height / 2);
-    let turns_h = area.height.saturating_sub(header_h);
+    // Layout: header (up to 9 rows — 3 base + sparkline + ctx + hint + borders) | turns | tools
+    let has_tokens = stats.total_input_tokens + stats.total_cache_read_tokens > 0;
+    let has_cost = stats.estimated_cost_usd > 0.001;
+    let extra_lines = (if has_cost { 1u16 } else { 0 }) + (if has_tokens { 1u16 } else { 0 });
+    let header_h = (7u16 + extra_lines).min(area.height / 2);
+    // Show tools section below turns when enough height
+    let has_tools = app.selected_session_tools.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+    let tools_h = if has_tools && area.height >= 24 { 5u16 } else { 0 };
+    let turns_h = area.height.saturating_sub(header_h + tools_h);
+
+    let constraints: Vec<Constraint> = if tools_h > 0 {
+        vec![
+            Constraint::Length(header_h),
+            Constraint::Min(turns_h),
+            Constraint::Length(tools_h),
+        ]
+    } else {
+        vec![Constraint::Length(header_h), Constraint::Min(turns_h)]
+    };
 
     let splits = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(header_h), Constraint::Min(turns_h)])
+        .constraints(constraints)
         .split(area);
 
     let border_style = Style::default().fg(app.theme.accent_dim());
@@ -1598,6 +1657,11 @@ fn draw_session_preview_panel(f: &mut Frame, app: &App, area: Rect) {
 
     if turns_h > 2 {
         draw_preview_turns(f, app, stats, accent, splits[1]);
+    }
+    if tools_h > 0 {
+        if let Some(tools) = &app.selected_session_tools {
+            draw_tools_compact(f, app, tools, splits[2]);
+        }
     }
 }
 
@@ -1712,12 +1776,74 @@ fn draw_preview_header(
         Style::default().fg(m),
     )]);
 
-    let lines = vec![
+    // Per-turn cost sparkline (only when there are turns with cost data)
+    let has_tokens = stats.total_input_tokens + stats.total_cache_read_tokens > 0;
+    let turn_costs: Vec<f64> = stats.turns.iter().map(|t| t.estimated_cost_usd).collect();
+    let spark_line = if !turn_costs.is_empty() && stats.estimated_cost_usd > 0.001 {
+        let spark_w = area.width.saturating_sub(14) as usize;
+        let peak = turn_costs.iter().cloned().fold(0.0_f64, f64::max);
+        Some(Line::from(vec![
+            Span::styled("  cost/turn ", Style::default().fg(m)),
+            Span::styled(
+                micro_sparkline(&turn_costs, spark_w.max(4)),
+                Style::default().fg(app.theme.cost_color()),
+            ),
+            Span::styled(
+                format!(" ▲${:.4}", peak),
+                Style::default().fg(app.theme.muted_color()),
+            ),
+        ]))
+    } else {
+        None
+    };
+
+    // Context line (only when token data available)
+    let ctx_line = if has_tokens {
+        let ctx_window = stats.session.as_ref()
+            .and_then(|s| s.context_window_tokens)
+            .unwrap_or_else(|| {
+                stats.session.as_ref().map(|s| context_window_for_model(&s.model)).unwrap_or(200_000)
+            });
+        let peak_ctx = stats.turns.iter()
+            .map(|t| t.input_tokens + t.cache_read_tokens)
+            .max()
+            .unwrap_or(0);
+        let compactions = stats.turns.iter().filter(|t| t.is_compaction_event).count();
+        let ctx_pct = if ctx_window > 0 { peak_ctx as f64 / ctx_window as f64 * 100.0 } else { 0.0 };
+        let ctx_col = app.theme.context_color(ctx_pct);
+        let bar_w = 10usize;
+        let ctx_bar = fill_bar(ctx_pct / 100.0, bar_w);
+        let mut spans = vec![
+            Span::styled("  CTX ", Style::default().fg(m)),
+            Span::styled(ctx_bar, Style::default().fg(ctx_col)),
+            Span::styled(
+                format!(" {:.0}% peak", ctx_pct),
+                Style::default().fg(ctx_col),
+            ),
+        ];
+        if compactions > 0 {
+            spans.push(Span::styled(
+                format!("  ⟳ {}×", compactions),
+                Style::default().fg(app.theme.warning_color()),
+            ));
+        }
+        Some(Line::from(spans))
+    } else {
+        None
+    };
+
+    let mut lines = vec![
         Line::from(line1),
         Line::from(line2),
         Line::from(line3),
-        hint,
     ];
+    if let Some(sl) = spark_line {
+        lines.push(sl);
+    }
+    if let Some(cl) = ctx_line {
+        lines.push(cl);
+    }
+    lines.push(hint);
 
     f.render_widget(
         Paragraph::new(lines).block(
@@ -1824,6 +1950,456 @@ fn draw_preview_turns(
     );
 
     f.render_widget(table, area);
+}
+
+// ── MCP & Skills section ──────────────────────────────────────────────────────
+
+/// Compact 3-line tools summary for the split-panel preview (gated on height ≥ 24).
+fn draw_tools_compact(f: &mut Frame, app: &App, tools: &[ToolBreakdownItem], area: Rect) {
+    let m = app.theme.muted_color();
+    let accent = app.theme.accent_color();
+    let warn = app.theme.warning_color();
+
+    // Group MCPs by server
+    let mut mcp_servers: Vec<(String, i64, Vec<String>)> = Vec::new();
+    let mut tool_parts: Vec<String> = Vec::new();
+    let mut hook_count: i64 = 0;
+    let mut skill_count: i64 = 0;
+    let mut subagent_count: i64 = 0;
+
+    for item in tools {
+        match item.kind.as_str() {
+            "mcp" => {
+                if let Some(e) = mcp_servers.iter_mut().find(|(s, _, _)| s == &item.server) {
+                    e.1 += item.count;
+                    if e.2.len() < 3 {
+                        e.2.push(format!("{}({})", item.name, item.count));
+                    }
+                } else {
+                    mcp_servers.push((
+                        item.server.clone(),
+                        item.count,
+                        vec![format!("{}({})", item.name, item.count)],
+                    ));
+                }
+            },
+            "tool" => {
+                if tool_parts.len() < 5 {
+                    tool_parts.push(format!("{}({})", item.name, item.count));
+                }
+            },
+            "hook" => hook_count += item.count,
+            "skill" => skill_count += item.count,
+            "subagent" => subagent_count += item.count,
+            _ => {},
+        }
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Line 1: MCP servers
+    if !mcp_servers.is_empty() {
+        let mut spans = vec![Span::styled("  MCP  ", Style::default().fg(m))];
+        for (srv, cnt, tool_list) in mcp_servers.iter().take(3) {
+            spans.push(Span::styled(
+                format!("{}({})", truncate_with_ellipsis(srv, 16), cnt),
+                Style::default().fg(accent),
+            ));
+            if !tool_list.is_empty() {
+                spans.push(Span::styled(
+                    format!(" [{}]  ", tool_list.join(" ")),
+                    Style::default().fg(m),
+                ));
+            } else {
+                spans.push(Span::styled("  ", Style::default()));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Line 2: Built-in tools
+    if !tool_parts.is_empty() {
+        let mut spans = vec![Span::styled("  Tools  ", Style::default().fg(m))];
+        spans.push(Span::styled(tool_parts.join("  "), Style::default().fg(app.theme.text_primary())));
+        lines.push(Line::from(spans));
+    }
+
+    // Line 3: Hooks / skills / subagents
+    {
+        let mut spans = vec![Span::styled("  ", Style::default())];
+        if hook_count > 0 {
+            spans.push(Span::styled(format!("Hooks {}  ", hook_count), Style::default().fg(m)));
+        }
+        if skill_count > 0 {
+            spans.push(Span::styled(format!("Skills {}  ", skill_count), Style::default().fg(warn)));
+        }
+        if subagent_count > 0 {
+            spans.push(Span::styled(
+                format!("Subagents {}", subagent_count),
+                Style::default().fg(app.theme.accent_color()),
+            ));
+        }
+        if hook_count > 0 || skill_count > 0 || subagent_count > 0 {
+            lines.push(Line::from(spans));
+        }
+    }
+
+    if lines.is_empty() {
+        return;
+    }
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::RIGHT | Borders::BOTTOM)
+                .border_type(app.theme.border_type())
+                .border_style(app.theme.inactive_border_style())
+                .title(" MCP & Skills "),
+        ),
+        area,
+    );
+}
+
+/// Full MCP & Skills breakdown for the fullscreen detail section.
+fn draw_tools_section(f: &mut Frame, app: &App, tools: &[ToolBreakdownItem], area: Rect) {
+    let m = app.theme.muted_color();
+    let accent = app.theme.accent_color();
+    let warn = app.theme.warning_color();
+
+    // Group MCPs by server
+    let mut mcp_map: std::collections::BTreeMap<String, (i64, Vec<String>)> =
+        std::collections::BTreeMap::new();
+    let mut tool_parts: Vec<String> = Vec::new();
+    let mut hook_parts: Vec<String> = Vec::new();
+    let mut skill_parts: Vec<String> = Vec::new();
+    let mut subagent_count: i64 = 0;
+    let mut compaction_count: i64 = 0;
+
+    for item in tools {
+        match item.kind.as_str() {
+            "mcp" => {
+                let e = mcp_map.entry(item.server.clone()).or_insert((0, Vec::new()));
+                e.0 += item.count;
+                if e.1.len() < 5 {
+                    e.1.push(format!("{}({})", item.name, item.count));
+                }
+            },
+            "tool" => tool_parts.push(format!("{}({})", item.name, item.count)),
+            "hook" => hook_parts.push(format!("{}({})", item.name, item.count)),
+            "skill" => skill_parts.push(format!("{}({})", item.name, item.count)),
+            "subagent" => subagent_count += item.count,
+            "compaction" => compaction_count += item.count,
+            _ => {},
+        }
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // MCP servers
+    for (srv, (cnt, tool_list)) in &mcp_map {
+        let mut spans = vec![
+            Span::styled("  MCP  ", Style::default().fg(m)),
+            Span::styled(
+                format!("{:<20}", truncate_with_ellipsis(srv, 20)),
+                Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" {}×  ", cnt), Style::default().fg(m)),
+        ];
+        spans.push(Span::styled(tool_list.join("  "), Style::default().fg(app.theme.text_secondary())));
+        lines.push(Line::from(spans));
+    }
+
+    // Built-in tools
+    if !tool_parts.is_empty() {
+        let w = area.width.saturating_sub(12) as usize;
+        let tool_str = truncate_with_ellipsis(&tool_parts.join("  "), w);
+        lines.push(Line::from(vec![
+            Span::styled("  Tools  ", Style::default().fg(m)),
+            Span::styled(tool_str, Style::default().fg(app.theme.text_primary())),
+        ]));
+    }
+
+    // Hooks
+    if !hook_parts.is_empty() {
+        let w = area.width.saturating_sub(12) as usize;
+        let hook_str = truncate_with_ellipsis(&hook_parts.join("  "), w);
+        lines.push(Line::from(vec![
+            Span::styled("  Hooks  ", Style::default().fg(m)),
+            Span::styled(hook_str, Style::default().fg(m)),
+        ]));
+    }
+
+    // Skills / subagents / compactions
+    {
+        let mut spans = vec![Span::styled("  ", Style::default())];
+        if !skill_parts.is_empty() {
+            spans.push(Span::styled("Skills  ", Style::default().fg(m)));
+            spans.push(Span::styled(skill_parts.join("  "), Style::default().fg(warn)));
+            spans.push(Span::styled("  ", Style::default()));
+        } else {
+            spans.push(Span::styled("Skills —  ", Style::default().fg(m)));
+        }
+        if subagent_count > 0 {
+            spans.push(Span::styled("Subagents  ", Style::default().fg(m)));
+            spans.push(Span::styled(
+                subagent_count.to_string(),
+                Style::default().fg(accent),
+            ));
+            spans.push(Span::styled("  ", Style::default()));
+        }
+        if compaction_count > 0 {
+            spans.push(Span::styled("Compactions  ", Style::default().fg(m)));
+            spans.push(Span::styled(
+                compaction_count.to_string(),
+                Style::default().fg(warn),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled("  No interaction events recorded for this session.", Style::default().fg(m))));
+    }
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(app.theme.border_type())
+                .border_style(app.theme.inactive_border_style())
+                .title(" MCP & Skills "),
+        ),
+        area,
+    );
+}
+
+// ── Context section ───────────────────────────────────────────────────────────
+
+fn draw_context_section(f: &mut Frame, app: &App, stats: &SessionStats, area: Rect) {
+    let m = app.theme.muted_color();
+
+    let total_tokens = stats.total_input_tokens + stats.total_cache_read_tokens;
+    if total_tokens == 0 {
+        let p = Paragraph::new(Line::from(Span::styled(
+            "  No token data available for this session (copilot-cli sessions do not record tokens).",
+            Style::default().fg(m),
+        )))
+        .block(Block::default().borders(Borders::ALL).border_type(app.theme.border_type()).title(" Context "));
+        f.render_widget(p, area);
+        return;
+    }
+
+    let ctx_window = stats.session.as_ref()
+        .and_then(|s| s.context_window_tokens)
+        .unwrap_or_else(|| {
+            stats.session.as_ref().map(|s| context_window_for_model(&s.model)).unwrap_or(200_000)
+        });
+
+    let ctx_series: Vec<f64> = stats.turns.iter()
+        .map(|t| {
+            if ctx_window > 0 {
+                (t.input_tokens + t.cache_read_tokens) as f64 / ctx_window as f64 * 100.0
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    let peak_ctx_tokens = stats.turns.iter()
+        .map(|t| t.input_tokens + t.cache_read_tokens)
+        .max()
+        .unwrap_or(0);
+    let peak_pct = if ctx_window > 0 {
+        peak_ctx_tokens as f64 / ctx_window as f64 * 100.0
+    } else {
+        0.0
+    };
+    let ctx_col = app.theme.context_color(peak_pct);
+    let compaction_count = stats.turns.iter().filter(|t| t.is_compaction_event).count();
+    let cache_write_total: i64 = stats.turns.iter().map(|t| t.cache_write_tokens).sum();
+
+    let bar_w = 18usize;
+    let peak_bar = fill_bar(peak_pct / 100.0, bar_w);
+    let spark_w = area.width.saturating_sub(6) as usize;
+
+    let provider = stats.session.as_ref().map(|s| s.provider.as_str()).unwrap_or("");
+
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(vec![
+            Span::styled("  Peak  ", Style::default().fg(m)),
+            Span::styled(peak_bar, Style::default().fg(ctx_col)),
+            Span::styled(
+                format!(" {:.1}%  ({} / {}k)",
+                    peak_pct,
+                    fmt_k(peak_ctx_tokens),
+                    ctx_window / 1000),
+                Style::default().fg(ctx_col).add_modifier(Modifier::BOLD),
+            ),
+            if compaction_count > 0 {
+                Span::styled(
+                    format!("   ⟳ compacted {}×", compaction_count),
+                    Style::default().fg(app.theme.warning_color()),
+                )
+            } else {
+                Span::styled("", Style::default())
+            },
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                micro_sparkline(&ctx_series, spark_w.max(8)),
+                Style::default().fg(ctx_col),
+            ),
+            Span::styled("  ctx% per turn", Style::default().fg(m)),
+        ]),
+    ];
+
+    if cache_write_total > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  Cached  ", Style::default().fg(m)),
+            Span::styled(
+                format!("{}k tokens written to prompt cache", cache_write_total / 1000),
+                Style::default().fg(app.theme.success_color()),
+            ),
+        ]));
+        if provider != "copilot-cli" {
+            lines.push(Line::from(Span::styled(
+                "  Tip: new session in same project reloads this cache automatically",
+                Style::default().fg(m),
+            )));
+        }
+    }
+
+    if compaction_count > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  Context was compacted {}× — session exceeded context window capacity", compaction_count),
+            Style::default().fg(app.theme.warning_color()),
+        )));
+    }
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(app.theme.border_type())
+                .border_style(app.theme.inactive_border_style())
+                .title(" Context Buildup "),
+        ),
+        area,
+    );
+}
+
+// ── Trends section (replaces cards when `t` is pressed) ──────────────────────
+
+fn draw_trends_section(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.theme;
+    let daily = app.global_stats.as_ref().map(|g| g.daily.clone()).unwrap_or_default();
+
+    if daily.is_empty() {
+        let p = Paragraph::new("  No daily history yet.")
+            .block(themed_block(t, "Trends  t: back to cards", false));
+        f.render_widget(p, area);
+        return;
+    }
+
+    // Build data newest→oldest then reverse for left=oldest, right=newest
+    let mut days: Vec<&scopeon_core::DailyRollup> = daily.iter().rev().take(14).collect();
+    days.reverse();
+
+    // ── 3-col layout: Cost | Sessions | Cache% ────────────────────────────────
+    let cols = if area.width >= 100 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(38), Constraint::Percentage(31), Constraint::Percentage(31)])
+            .split(area)
+    } else {
+        // Narrow: two cols
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(area)
+    };
+
+    // ── Cost/day BarChart ─────────────────────────────────────────────────────
+    let max_cost = days.iter().map(|d| d.estimated_cost_usd).fold(0.0_f64, f64::max).max(0.001);
+    let cost_bars: Vec<Bar> = days.iter().map(|d| {
+        let label = if let Ok(date) = chrono::NaiveDate::parse_from_str(&d.date, "%Y-%m-%d") {
+            format!("{}/{}", date.format("%m"), date.format("%d"))
+        } else {
+            d.date[5..].to_string()
+        };
+        let pct = d.estimated_cost_usd / max_cost;
+        let color = if app.budget.daily_limit > 0.0 && d.estimated_cost_usd >= app.budget.daily_limit * 0.9 {
+            t.error_color()
+        } else if pct > 0.7 {
+            t.warning_color()
+        } else {
+            t.cost_color()
+        };
+        Bar::default()
+            .label(label.into())
+            .value((d.estimated_cost_usd * 100.0) as u64)
+            .style(Style::default().fg(color))
+    }).collect();
+
+    let cost_chart = BarChart::default()
+        .block(themed_block(t, &format!("Cost/day  max ${:.2}  t: back", max_cost), false))
+        .bar_width(2)
+        .bar_gap(1)
+        .max((max_cost * 100.0) as u64)
+        .data(BarGroup::default().bars(&cost_bars));
+    f.render_widget(cost_chart, cols[0]);
+
+    // ── Sessions/day BarChart ─────────────────────────────────────────────────
+    let max_sess = days.iter().map(|d| d.session_count).max().unwrap_or(1).max(1);
+    let sess_bars: Vec<Bar> = days.iter().map(|d| {
+        Bar::default()
+            .value(d.session_count as u64)
+            .style(Style::default().fg(t.accent_dim()))
+    }).collect();
+
+    let sess_chart = BarChart::default()
+        .block(themed_block_borders(t, &format!("Sessions/day  max {}", max_sess), false,
+            Borders::TOP | Borders::RIGHT | Borders::BOTTOM))
+        .bar_width(2)
+        .bar_gap(1)
+        .max(max_sess as u64)
+        .data(BarGroup::default().bars(&sess_bars));
+    f.render_widget(sess_chart, cols[1]);
+
+    // ── Cache%/day (only when 3 cols available) ───────────────────────────────
+    if cols.len() > 2 {
+        // Use session_summaries to derive daily avg cache rate
+        let cache_rates: Vec<f64> = days.iter().map(|d| {
+            let day_sessions: Vec<f64> = app.sessions_list.iter()
+                .filter(|s| {
+                    chrono::DateTime::from_timestamp_millis(s.started_at)
+                        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string() == d.date)
+                        .unwrap_or(false)
+                })
+                .filter_map(|s| app.session_summaries.get(&s.id))
+                .map(|sm| sm.cache_hit_rate * 100.0)
+                .filter(|&r| r > 0.0)
+                .collect();
+            if day_sessions.is_empty() { 0.0 } else { day_sessions.iter().sum::<f64>() / day_sessions.len() as f64 }
+        }).collect();
+
+        let cache_bars: Vec<Bar> = cache_rates.iter().map(|&r| {
+            let color = t.cache_color(r);
+            Bar::default()
+                .value(r as u64)
+                .style(Style::default().fg(color))
+        }).collect();
+
+        let cache_chart = BarChart::default()
+            .block(themed_block_borders(t, "Cache%/day", false,
+                Borders::TOP | Borders::RIGHT | Borders::BOTTOM))
+            .bar_width(2)
+            .bar_gap(1)
+            .max(100)
+            .data(BarGroup::default().bars(&cache_bars));
+        f.render_widget(cache_chart, cols[2]);
+    }
 }
 
 // ── Full-screen detail mode (Enter key) ──────────────────────────────────────
@@ -2003,90 +2579,97 @@ fn draw_session_detail_fullscreen(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    // IS-2: When replay mode is active, show a 3-row snapshot panel above the turn table.
-    let (header_h, replay_h) = if app.replay_turn_idx.is_some() {
-        (7, 3)
-    } else {
-        (7, 0)
-    };
+    let header_h = 7u16;
+    let section_bar_h = 1u16;
 
+    // Layout: header | section bar | content
     let v = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(if replay_h > 0 {
-            vec![
-                Constraint::Length(header_h),
-                Constraint::Length(replay_h),
-                Constraint::Min(0),
-            ]
-        } else {
-            vec![Constraint::Length(header_h), Constraint::Min(0)]
-        })
+        .constraints([
+            Constraint::Length(header_h),
+            Constraint::Length(section_bar_h),
+            Constraint::Min(0),
+        ])
         .split(area);
 
     draw_detail_header(f, app, stats, app.theme.active_border_style(), v[0]);
 
-    // IS-2: Replay snapshot panel
-    if let Some(turn_idx) = app.replay_turn_idx {
-        let turn_area = v[1];
-        let table_area = v[2];
-        let n_turns = stats.turns.len();
-        // turns are stored oldest-first in stats.turns
-        let t_idx = turn_idx.min(n_turns.saturating_sub(1));
-        if let Some(t) = stats.turns.get(t_idx) {
-            let ctx_pct = (t.input_tokens + t.cache_read_tokens) as f64 / 200_000.0 * 100.0;
-            let ctx_color = app.theme.context_color(ctx_pct);
-            let muted = app.theme.muted_color();
-            let acc = app.theme.accent_color();
-            let cum_cost: f64 = stats
-                .turns
-                .iter()
-                .take(t_idx + 1)
-                .map(|t| t.estimated_cost_usd)
-                .sum();
-            let snapshot_line = Line::from(vec![
-                Span::styled(
-                    format!(" ◈ Turn {} / {}  ", t_idx + 1, n_turns),
-                    Style::default().fg(acc).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("│ ", Style::default().fg(muted)),
-                Span::styled(
-                    format!("Ctx {:.0}%  ", ctx_pct),
-                    Style::default().fg(ctx_color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(
-                        "Input {}K  Cache↓ {}K  Output {}K  ",
-                        fmt_k(t.input_tokens),
-                        fmt_k(t.cache_read_tokens),
-                        fmt_k(t.output_tokens)
-                    ),
-                    Style::default().fg(muted),
-                ),
-                Span::styled(
-                    format!(
-                        "Turn ${:.4}  Cumulative ${:.3}  ",
-                        t.estimated_cost_usd, cum_cost
-                    ),
-                    Style::default().fg(app.theme.cost_color()),
-                ),
-                Span::styled("← → scrub  Esc exit replay", Style::default().fg(muted)),
-            ]);
-            f.render_widget(
-                Paragraph::new(snapshot_line).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_type(app.theme.border_type())
-                        .border_style(Style::default().fg(acc))
-                        .title(" ◈ Temporal Replay "),
-                ),
-                turn_area,
-            );
-            draw_replay_turn_table(f, app, stats, t_idx, table_area);
+    // ── Section selector bar ──────────────────────────────────────────────────
+    let m = app.theme.muted_color();
+    let sections = [DetailSection::Turns, DetailSection::Context, DetailSection::McpSkills];
+    let mut bar_spans = vec![Span::styled(" ", Style::default().fg(m))];
+    for sec in &sections {
+        let is_active = *sec == app.detail_section;
+        let label = if is_active {
+            format!(" ◆ {} ", sec.label())
         } else {
-            draw_fullscreen_turn_table(f, app, stats, None, table_area);
-        }
-    } else {
-        draw_fullscreen_turn_table(f, app, stats, None, v[1]);
+            format!("   {} ", sec.label())
+        };
+        let style = if is_active {
+            Style::default().fg(app.theme.accent_color()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(m)
+        };
+        bar_spans.push(Span::styled(label, style));
+        bar_spans.push(Span::styled(" │", Style::default().fg(m)));
+    }
+    bar_spans.push(Span::styled("  Tab: switch  Esc: back  ↑↓: scroll  → ←: replay", Style::default().fg(m)));
+    f.render_widget(Paragraph::new(Line::from(bar_spans)), v[1]);
+
+    // ── Section content ───────────────────────────────────────────────────────
+    let content_area = v[2];
+    match app.detail_section {
+        DetailSection::Turns => {
+            // IS-2: When replay mode is active, show a 3-row snapshot panel above the turn table.
+            if let Some(turn_idx) = app.replay_turn_idx {
+                let replay_h = 3u16;
+                let inner = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(replay_h), Constraint::Min(0)])
+                    .split(content_area);
+                let n_turns = stats.turns.len();
+                let t_idx = turn_idx.min(n_turns.saturating_sub(1));
+                if let Some(t) = stats.turns.get(t_idx) {
+                    let ctx_pct = (t.input_tokens + t.cache_read_tokens) as f64 / 200_000.0 * 100.0;
+                    let ctx_color = app.theme.context_color(ctx_pct);
+                    let muted = app.theme.muted_color();
+                    let acc = app.theme.accent_color();
+                    let cum_cost: f64 = stats.turns.iter().take(t_idx + 1).map(|t| t.estimated_cost_usd).sum();
+                    let snapshot_line = Line::from(vec![
+                        Span::styled(format!(" ◈ Turn {} / {}  ", t_idx + 1, n_turns), Style::default().fg(acc).add_modifier(Modifier::BOLD)),
+                        Span::styled("│ ", Style::default().fg(muted)),
+                        Span::styled(format!("Ctx {:.0}%  ", ctx_pct), Style::default().fg(ctx_color).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("Input {}K  Cache↓ {}K  Output {}K  ", fmt_k(t.input_tokens), fmt_k(t.cache_read_tokens), fmt_k(t.output_tokens)), Style::default().fg(muted)),
+                        Span::styled(format!("Turn ${:.4}  Cumulative ${:.3}  ", t.estimated_cost_usd, cum_cost), Style::default().fg(app.theme.cost_color())),
+                        Span::styled("← → scrub  Esc exit replay", Style::default().fg(muted)),
+                    ]);
+                    f.render_widget(
+                        Paragraph::new(snapshot_line).block(
+                            Block::default().borders(Borders::ALL).border_type(app.theme.border_type())
+                                .border_style(Style::default().fg(acc)).title(" ◈ Temporal Replay "),
+                        ),
+                        inner[0],
+                    );
+                    draw_replay_turn_table(f, app, stats, t_idx, inner[1]);
+                } else {
+                    draw_fullscreen_turn_table(f, app, stats, None, inner[1]);
+                }
+            } else {
+                draw_fullscreen_turn_table(f, app, stats, None, content_area);
+            }
+        },
+        DetailSection::Context => {
+            draw_context_section(f, app, stats, content_area);
+        },
+        DetailSection::McpSkills => {
+            if let Some(tools) = &app.selected_session_tools {
+                draw_tools_section(f, app, tools, content_area);
+            } else {
+                let p = Paragraph::new("  No interaction events found for this session.")
+                    .block(Block::default().borders(Borders::ALL).title(" MCP & Skills "));
+                f.render_widget(p, content_area);
+            }
+        },
     }
 }
 
