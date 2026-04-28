@@ -962,57 +962,38 @@ fn draw_today_card(f: &mut Frame, app: &App, area: Rect) {
     let t = app.theme;
     let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    // Compute today's stats directly from sessions_list + session_summaries so that
-    // the All view is always consistent with the per-provider/model scoped dashboards,
-    // even when the daily_rollup materialized table hasn't been refreshed yet.
-    let today_sessions = app
-        .sessions_list
-        .iter()
+    // Compute today's stats directly from sessions_list + session_summaries.
+    let today_sessions = app.sessions_list.iter().filter(|s| {
+        chrono::DateTime::from_timestamp_millis(s.started_at)
+            .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string() == today_str)
+            .unwrap_or(false)
+    }).count();
+
+    let today_cost: f64 = app.sessions_list.iter()
         .filter(|s| {
             chrono::DateTime::from_timestamp_millis(s.started_at)
-                .map(|dt| {
-                    dt.with_timezone(&chrono::Local)
-                        .format("%Y-%m-%d")
-                        .to_string()
-                        == today_str
-                })
-                .unwrap_or(false)
-        })
-        .count();
-    let today_cost: f64 = app
-        .sessions_list
-        .iter()
-        .filter(|s| {
-            chrono::DateTime::from_timestamp_millis(s.started_at)
-                .map(|dt| {
-                    dt.with_timezone(&chrono::Local)
-                        .format("%Y-%m-%d")
-                        .to_string()
-                        == today_str
-                })
+                .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string() == today_str)
                 .unwrap_or(false)
         })
         .filter_map(|s| app.session_summaries.get(&s.id))
         .map(|sm| sm.estimated_cost_usd)
         .sum();
-    let today_turns: i64 = app
-        .sessions_list
-        .iter()
+
+    let today_turns: i64 = app.sessions_list.iter()
         .filter(|s| {
             chrono::DateTime::from_timestamp_millis(s.started_at)
-                .map(|dt| {
-                    dt.with_timezone(&chrono::Local)
-                        .format("%Y-%m-%d")
-                        .to_string()
-                        == today_str
-                })
+                .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string() == today_str)
                 .unwrap_or(false)
         })
         .map(|s| s.total_turns)
         .sum();
-    // Use the higher of the two cost sources (live sessions vs materialized rollup).
+
     let spent = today_cost.max(app.budget.daily_spent);
     let limit = app.budget.daily_limit;
+
+    // When there's no activity today, show all-time totals instead so the card
+    // always has meaningful data (consistent with the scoped provider/model views).
+    let has_today = today_sessions > 0 || spent > 0.001;
 
     let (live_icon, live_color) = if app.is_live {
         ("◉", t.success_color())
@@ -1022,66 +1003,124 @@ fn draw_today_card(f: &mut Frame, app: &App, area: Rect) {
         ("◎", t.muted_color())
     };
 
-    let trend_glyph = if app.trend_cost_pct > 2.0 {
-        " ↑"
-    } else if app.trend_cost_pct < -2.0 {
-        " ↓"
-    } else {
-        " ≈"
-    };
-
+    let m = t.muted_color();
     let mut lines: Vec<Line<'static>> = vec![];
 
-    // Line 1: live indicator · today cost · trend · turns · sessions
-    lines.push(Line::from(vec![
-        Span::styled(format!("  {} ", live_icon), Style::default().fg(live_color)),
-        Span::styled(
-            format!("${:.2}{}", spent, trend_glyph),
-            Style::default().fg(t.cost_color()).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("   {}t  {}s", today_turns, today_sessions),
-            Style::default().fg(t.text_secondary()),
-        ),
-    ]));
-
-    // Line 2: budget bar (only when limit configured)
-    if limit > 0.0 {
-        let runway_pct = (spent / limit * 100.0).min(100.0);
-        let bar_w = (area.width.saturating_sub(14) as usize).clamp(6, 14);
-        let filled = (runway_pct / 100.0 * bar_w as f64) as usize;
-        let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
-        let bar_color = if runway_pct >= 90.0 {
-            t.error_color()
-        } else if runway_pct >= 70.0 {
-            t.warning_color()
+    if has_today {
+        let trend_glyph = if app.trend_cost_pct > 2.0 {
+            " ↑"
+        } else if app.trend_cost_pct < -2.0 {
+            " ↓"
         } else {
-            t.success_color()
+            " ≈"
         };
-        let remaining = (limit - spent).max(0.0);
+
         lines.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(bar, Style::default().fg(bar_color)),
+            Span::styled(format!("  {} ", live_icon), Style::default().fg(live_color)),
             Span::styled(
-                format!(" ${:.2} left", remaining),
-                Style::default().fg(bar_color),
+                format!("${:.2}{}", spent, trend_glyph),
+                Style::default().fg(t.cost_color()).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("   {}t  {}s", today_turns, today_sessions),
+                Style::default().fg(t.text_secondary()),
             ),
         ]));
-    }
 
-    // Line 3: EOD projection (only when meaningfully different from current spend)
-    let projected = app.budget.daily_projected_eod;
-    if projected > spent + 0.01 && projected < spent * 5.0 {
-        lines.push(Line::from(vec![Span::styled(
-            format!("  → ${:.2} by EOD", projected),
-            Style::default().fg(t.muted_color()),
-        )]));
-    }
+        if limit > 0.0 {
+            let runway_pct = (spent / limit * 100.0).min(100.0);
+            let bar_w = (area.width.saturating_sub(14) as usize).clamp(6, 14);
+            let filled = (runway_pct / 100.0 * bar_w as f64) as usize;
+            let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
+            let bar_color = if runway_pct >= 90.0 {
+                t.error_color()
+            } else if runway_pct >= 70.0 {
+                t.warning_color()
+            } else {
+                t.success_color()
+            };
+            let remaining = (limit - spent).max(0.0);
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(bar, Style::default().fg(bar_color)),
+                Span::styled(
+                    format!(" ${:.2} left", remaining),
+                    Style::default().fg(bar_color),
+                ),
+            ]));
+        }
 
-    f.render_widget(
-        Paragraph::new(lines).block(themed_block(t, "Today", false)),
-        area,
-    );
+        let projected = app.budget.daily_projected_eod;
+        if projected > spent + 0.01 && projected < spent * 5.0 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  → ${:.2} by EOD", projected),
+                Style::default().fg(m),
+            )]));
+        }
+
+        f.render_widget(
+            Paragraph::new(lines).block(themed_block(t, "Today", false)),
+            area,
+        );
+    } else {
+        // No sessions today — show all-time overview so the card is never blank.
+        let stats = compute_scoped_stats(app, None, None);
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", live_icon), Style::default().fg(live_color)),
+            Span::styled(
+                format!("{}", stats.session_count),
+                Style::default().fg(t.text_primary()).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" sessions", Style::default().fg(m)),
+            Span::styled(
+                format!("   {}t total", fmt_k(stats.total_turns)),
+                Style::default().fg(m),
+            ),
+        ]));
+
+        if stats.total_cost > 0.0 {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("${:.3}", stats.total_cost),
+                    Style::default().fg(t.cost_color()).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  total spend", Style::default().fg(m)),
+            ]));
+        }
+
+        if stats.avg_cost_per_session > 0.0 {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("${:.3}", stats.avg_cost_per_session),
+                    Style::default().fg(t.cost_color()),
+                ),
+                Span::styled("  avg / session", Style::default().fg(m)),
+            ]));
+        }
+
+        let trend = week_trend_str(stats.week_cost, stats.prev_week_cost);
+        if !trend.is_empty() {
+            let trend_col = if trend.starts_with('↑') {
+                t.error_color()
+            } else if trend.starts_with('↓') {
+                t.success_color()
+            } else {
+                m
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {}", trend),
+                Style::default().fg(trend_col),
+            )));
+        }
+
+        f.render_widget(
+            Paragraph::new(lines).block(themed_block(t, "All-time", false)),
+            area,
+        );
+    }
 }
 
 fn draw_efficiency_card(f: &mut Frame, app: &App, area: Rect) {
