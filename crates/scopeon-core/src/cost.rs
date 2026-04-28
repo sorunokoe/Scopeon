@@ -457,8 +457,12 @@ pub fn get_pricing_with_overrides<'a>(
 ///
 /// Including `cache_write` in the denominator prevents fresh cache-warming turns
 /// from artificially inflating the rate. Returns 0.0 when the denominator is zero.
-pub fn cache_hit_rate(input: i64, cache_read: i64, cache_write: i64) -> f64 {
-    let denom = input + cache_read + cache_write;
+pub fn cache_hit_rate(input: i64, cache_read: i64, _cache_write: i64) -> f64 {
+    // Hit rate = tokens served from cache / (regular input + cached input).
+    // cache_write tokens represent the cost of *writing* to the cache — they are
+    // not eligible for a hit/miss event and must NOT be in the denominator.
+    // Including them would artificially deflate the metric (L-1 code review finding).
+    let denom = input + cache_read;
     if denom > 0 {
         cache_read as f64 / denom as f64
     } else {
@@ -739,9 +743,11 @@ mod tests {
 
     #[test]
     fn test_cache_hit_rate_mixed() {
-        // input=100, read=400, write=100 → 400/600 ≈ 0.6667
+        // input=100, read=400, write=100
+        // Correct formula: read / (input + read) = 400 / 500 = 0.8
+        // (write is excluded from denominator — L-1 fix)
         let rate = cache_hit_rate(100, 400, 100);
-        assert!((rate - 400.0 / 600.0).abs() < EPSILON);
+        assert!((rate - 400.0 / 500.0).abs() < EPSILON);
     }
 
     // ── Invariant tests: economic relationships ─────────────────────────────
@@ -1131,5 +1137,199 @@ mod tests {
             calculate_turn_cost("gemini-3.1-flash-lite-preview", 0, 0, 1_000_000, 1_000_000);
         assert!((cost_cache.cache_write_usd - 1.00).abs() < EPSILON);
         assert!((cost_cache.cache_read_usd - 0.025).abs() < EPSILON);
+    }
+
+    // ── cache_hit_rate correctness ────────────────────────────────────────────
+
+    #[test]
+    fn cache_hit_rate_all_zeros_returns_zero() {
+        assert_eq!(cache_hit_rate(0, 0, 0), 0.0);
+    }
+
+    #[test]
+    fn cache_hit_rate_no_cache_activity_returns_zero() {
+        // 1000 plain input tokens, no cache → 0% hit rate
+        assert_eq!(cache_hit_rate(1000, 0, 0), 0.0);
+    }
+
+    #[test]
+    fn cache_hit_rate_full_cache_read_only() {
+        // All tokens served from cache (read = total) → 100% relative to (input + read)
+        // Denominator only includes input + read (not write):
+        //   rate = read / (input + read) = 1000 / (0 + 1000) = 1.0
+        let rate = cache_hit_rate(0, 1000, 0);
+        assert!((rate - 1.0).abs() < EPSILON, "expected 1.0, got {rate}");
+    }
+
+    #[test]
+    fn cache_hit_rate_half_cached() {
+        // 500 input, 500 cache_read → 50% hit rate on (input + read)
+        let rate = cache_hit_rate(500, 500, 0);
+        assert!(
+            (rate - 0.5).abs() < EPSILON,
+            "expected 0.5, got {rate}"
+        );
+    }
+
+    #[test]
+    fn cache_hit_rate_write_tokens_do_not_inflate_denominator() {
+        // Bug check: cache_write should NOT be in the denominator.
+        // With 500 input, 500 read, 1_000_000 write tokens:
+        //   WRONG: 500 / (500 + 500 + 1_000_000) ≈ 0.000499 (nearly zero)
+        //   CORRECT: 500 / (500 + 500) = 0.5
+        let rate = cache_hit_rate(500, 500, 1_000_000);
+        assert!(
+            (rate - 0.5).abs() < EPSILON,
+            "cache_write must not deflate hit rate; expected 0.5, got {rate}"
+        );
+    }
+
+    #[test]
+    fn cache_hit_rate_large_numbers_no_overflow() {
+        // 10M input + 10M read → 50% hit rate (using i64, no overflow)
+        let rate = cache_hit_rate(10_000_000, 10_000_000, 0);
+        assert!((rate - 0.5).abs() < EPSILON);
+    }
+
+    #[test]
+    fn cache_hit_rate_result_in_zero_to_one() {
+        // For any non-degenerate input the result must be in [0.0, 1.0]
+        let cases = [
+            (0_i64, 0_i64, 0_i64),
+            (1000, 0, 0),
+            (0, 1000, 0),
+            (500, 500, 5000),
+            (1, 999, 1_000_000),
+        ];
+        for (inp, rd, wr) in cases {
+            let rate = cache_hit_rate(inp, rd, wr);
+            assert!(
+                (0.0..=1.0).contains(&rate),
+                "cache_hit_rate({inp},{rd},{wr}) = {rate} out of [0,1]"
+            );
+        }
+    }
+
+    // ── calculate_turn_cost — structural correctness ─────────────────────────
+
+    #[test]
+    fn turn_cost_all_zero_tokens_returns_zero_cost() {
+        let cost = calculate_turn_cost("claude-sonnet-4-5", 0, 0, 0, 0);
+        assert_eq!(cost.input_usd, 0.0);
+        assert_eq!(cost.output_usd, 0.0);
+        assert_eq!(cost.cache_write_usd, 0.0);
+        assert_eq!(cost.cache_read_usd, 0.0);
+        assert_eq!(cost.total_usd, 0.0);
+    }
+
+    #[test]
+    fn turn_cost_total_equals_sum_of_parts() {
+        // total_usd must always equal sum of the four components
+        let cases = [
+            ("claude-sonnet-4-5", 1000, 500, 200, 300),
+            ("claude-haiku-4-5-20251001", 5000, 2000, 100, 800),
+            ("gpt-4o", 100_000, 50_000, 0, 0),
+        ];
+        for (model, inp, out, cw, cr) in cases {
+            let cost = calculate_turn_cost(model, inp, out, cw, cr);
+            let reconstructed = cost.input_usd + cost.output_usd + cost.cache_write_usd + cost.cache_read_usd;
+            assert!(
+                (cost.total_usd - reconstructed).abs() < EPSILON,
+                "{model}: total {:.10} ≠ sum of parts {:.10}",
+                cost.total_usd, reconstructed
+            );
+        }
+    }
+
+    #[test]
+    fn turn_cost_nonzero_for_nonzero_tokens_known_model() {
+        // A turn with real token counts must never show $0 cost
+        let cost = calculate_turn_cost("claude-sonnet-4-5", 1000, 500, 0, 0);
+        assert!(cost.total_usd > 0.0, "nonzero tokens must produce nonzero cost");
+        assert!(cost.input_usd > 0.0);
+        assert!(cost.output_usd > 0.0);
+    }
+
+    #[test]
+    fn turn_cost_all_parts_non_negative() {
+        // No cost component should ever go negative
+        let cost = calculate_turn_cost("claude-sonnet-4-5", 1000, 1000, 500, 500);
+        assert!(cost.input_usd >= 0.0);
+        assert!(cost.output_usd >= 0.0);
+        assert!(cost.cache_write_usd >= 0.0);
+        assert!(cost.cache_read_usd >= 0.0);
+        assert!(cost.total_usd >= 0.0);
+    }
+
+    // ── cache_savings_usd ─────────────────────────────────────────────────────
+
+    #[test]
+    fn cache_savings_zero_tokens_returns_zero() {
+        assert_eq!(cache_savings_usd("claude-sonnet-4-5", 0, 0), 0.0);
+    }
+
+    #[test]
+    fn cache_savings_read_only_positive_saving() {
+        // Reading from cache avoids paying full input price → positive saving
+        let saving = cache_savings_usd("claude-sonnet-4-5", 1_000_000, 0);
+        assert!(saving > 0.0, "cache read should yield positive saving, got {saving}");
+    }
+
+    #[test]
+    fn cache_savings_write_only_no_saving_or_negative() {
+        // Writing to cache costs more than plain input for claude models
+        // → net saving is ≤ 0.0 (no reads to offset the write overhead)
+        let saving = cache_savings_usd("claude-sonnet-4-5", 0, 1_000_000);
+        assert!(saving <= 0.0, "write-only cache should not yield net positive saving, got {saving}");
+    }
+
+    #[test]
+    fn cache_savings_can_be_negative_when_write_overhead_exceeds_read_savings() {
+        // Write 1M tokens, read only 1 token → overhead far exceeds tiny saving
+        let saving = cache_savings_usd("claude-sonnet-4-5", 1, 1_000_000);
+        assert!(saving < 0.0, "high write/low read should produce negative net saving, got {saving}");
+    }
+
+    // ── shadow_cost ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn shadow_cost_same_model_prefix_returns_none() {
+        // Comparing a model to itself → no shadow cost (would be trivial)
+        let result = shadow_cost(
+            "claude-sonnet-4-5", "claude-sonnet-4-5",
+            1000, 500, 0, 0,
+        );
+        assert!(result.is_none(), "same model should return None");
+    }
+
+    #[test]
+    fn shadow_cost_different_models_returns_some() {
+        let result = shadow_cost(
+            "claude-haiku-4-5-20251001", "claude-opus-4-5",
+            1000, 500, 0, 0,
+        );
+        assert!(result.is_some(), "different models should return Some");
+        assert!(result.unwrap() > 0.0, "shadow cost must be positive for nonzero tokens");
+    }
+
+    #[test]
+    fn shadow_cost_zero_tokens_returns_zero_cost() {
+        let result = shadow_cost(
+            "claude-haiku-4-5-20251001", "claude-opus-4-5",
+            0, 0, 0, 0,
+        );
+        assert_eq!(result, Some(0.0));
+    }
+
+    #[test]
+    fn shadow_cost_haiku_to_opus_is_higher() {
+        // Opus is more expensive than Haiku → shadow cost > actual cost
+        let actual = calculate_turn_cost("claude-haiku-4-5-20251001", 10_000, 5_000, 0, 0);
+        let shadow = shadow_cost(
+            "claude-haiku-4-5-20251001", "claude-opus-4-5",
+            10_000, 5_000, 0, 0,
+        ).unwrap();
+        assert!(shadow > actual.total_usd,
+            "opus shadow cost {shadow} should exceed haiku actual {}", actual.total_usd);
     }
 }

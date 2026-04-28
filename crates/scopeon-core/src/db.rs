@@ -907,7 +907,7 @@ impl Database {
             },
         )?;
 
-        // cache_hit_rate: read / (input + read + write) — canonical formula from cost.rs
+        // cache_hit_rate: read / (input + read) — write tokens excluded from denominator (L-1 fix)
         let cache_hit_rate_val = cache_hit_rate(row.2, row.3, row.4);
 
         // Compute cache net savings: (read saving) - (write overhead), grouped by model.
@@ -2486,9 +2486,10 @@ mod tests {
         db.upsert_turn(&make_turn("t-a", "sess-6", 0)).unwrap();
 
         let stats = db.get_session_stats("sess-6").unwrap();
-        // cache_hit_rate = cache_read / (input + cache_read + cache_write)
-        // = 500 / (100 + 500 + 200) = 500/800 = 62.5%
-        assert!((stats.cache_hit_rate - 500.0 / 800.0).abs() < 1e-9);
+        // cache_hit_rate = cache_read / (input + cache_read)
+        // = 500 / (100 + 500) = 500/600 ≈ 83.3%
+        // Note: cache_write (200 tokens) is excluded from denominator (L-1 fix)
+        assert!((stats.cache_hit_rate - 500.0 / 600.0).abs() < 1e-9);
     }
 
     #[test]
@@ -2824,5 +2825,348 @@ mod tests {
         let (_, cost, count) = feat_row.unwrap();
         assert!((cost - 0.75).abs() < 0.001);
         assert_eq!(*count, 2);
+    }
+
+    // ── Number correctness: totals must never be zero when data exists ────────
+
+    #[test]
+    fn get_global_stats_empty_db_returns_zeros() {
+        let db = Database::open_in_memory().unwrap();
+        let stats = db.get_global_stats().unwrap();
+        assert_eq!(stats.total_sessions, 0, "empty DB must have 0 sessions");
+        assert_eq!(stats.total_turns, 0, "empty DB must have 0 turns");
+        assert_eq!(stats.estimated_cost_usd, 0.0, "empty DB must have $0 cost");
+    }
+
+    #[test]
+    fn get_global_stats_nonzero_after_insert() {
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-global-1");
+        db.upsert_session(&s).unwrap();
+
+        let mut t = make_turn("t-global-1", "s-global-1", 0);
+        t.input_tokens = 1000;
+        t.output_tokens = 500;
+        t.estimated_cost_usd = 0.123;
+        db.upsert_turn(&t).unwrap();
+
+        let stats = db.get_global_stats().unwrap();
+        assert!(stats.total_sessions > 0, "must count session, got 0");
+        assert!(stats.total_turns > 0, "must count turn, got 0");
+        assert!(stats.total_input_tokens > 0, "must count input tokens, got 0");
+        assert!(stats.total_output_tokens > 0, "must count output tokens, got 0");
+        assert!(
+            stats.estimated_cost_usd > 0.0,
+            "must show cost, got {}", stats.estimated_cost_usd
+        );
+    }
+
+    #[test]
+    fn get_global_stats_multi_session_aggregates_correctly() {
+        let db = Database::open_in_memory().unwrap();
+        for i in 0..3 {
+            let sid = format!("s-multi-{i}");
+            let mut s = make_session(&sid);
+            s.provider = "claude-code".to_string();
+            db.upsert_session(&s).unwrap();
+
+            let tid = format!("t-multi-{i}");
+            let mut t = make_turn(&tid, &sid, 0);
+            t.input_tokens = 1_000;
+            t.output_tokens = 400;
+            t.estimated_cost_usd = 0.01;
+            db.upsert_turn(&t).unwrap();
+        }
+
+        let stats = db.get_global_stats().unwrap();
+        assert_eq!(stats.total_sessions, 3);
+        assert_eq!(stats.total_turns, 3);
+        assert_eq!(stats.total_input_tokens, 3_000);
+        assert_eq!(stats.total_output_tokens, 1_200);
+        assert!((stats.estimated_cost_usd - 0.03).abs() < 1e-6,
+            "expected $0.03, got ${}", stats.estimated_cost_usd);
+    }
+
+    // ── SessionStats aggregation correctness ─────────────────────────────────
+
+    #[test]
+    fn get_session_stats_single_turn_nonzero_all_fields() {
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-sstats-1");
+        db.upsert_session(&s).unwrap();
+
+        let mut t = make_turn("t-sstats-1", "s-sstats-1", 0);
+        t.input_tokens = 800;
+        t.cache_read_tokens = 200;
+        t.cache_write_tokens = 100;
+        t.output_tokens = 300;
+        t.estimated_cost_usd = 0.050;
+        db.upsert_turn(&t).unwrap();
+
+        let stats = db.get_session_stats("s-sstats-1").unwrap();
+        assert_eq!(stats.total_turns, 1);
+        assert_eq!(stats.total_input_tokens, 800);
+        assert_eq!(stats.total_cache_read_tokens, 200);
+        assert_eq!(stats.total_cache_write_tokens, 100);
+        assert_eq!(stats.total_output_tokens, 300);
+        assert!(
+            (stats.estimated_cost_usd - 0.050).abs() < 1e-6,
+            "expected $0.05, got ${}", stats.estimated_cost_usd
+        );
+    }
+
+    #[test]
+    fn get_session_stats_multi_turn_sums_correctly() {
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-sstats-multi");
+        db.upsert_session(&s).unwrap();
+
+        for i in 0..5 {
+            let mut t = make_turn(&format!("t-ss-{i}"), "s-sstats-multi", i as i64);
+            t.input_tokens = 100;
+            t.output_tokens = 50;
+            t.estimated_cost_usd = 0.001;
+            db.upsert_turn(&t).unwrap();
+        }
+
+        let stats = db.get_session_stats("s-sstats-multi").unwrap();
+        assert_eq!(stats.total_turns, 5, "must count all 5 turns, got {}", stats.total_turns);
+        assert_eq!(stats.total_input_tokens, 500);
+        assert_eq!(stats.total_output_tokens, 250);
+        assert!(
+            (stats.estimated_cost_usd - 0.005).abs() < 1e-6,
+            "expected $0.005, got ${}", stats.estimated_cost_usd
+        );
+    }
+
+    #[test]
+    fn get_session_stats_cache_hit_rate_correct() {
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-hitrate");
+        db.upsert_session(&s).unwrap();
+
+        let mut t = make_turn("t-hitrate-1", "s-hitrate", 0);
+        t.input_tokens = 500;
+        t.cache_read_tokens = 500;
+        t.cache_write_tokens = 0;
+        db.upsert_turn(&t).unwrap();
+
+        let stats = db.get_session_stats("s-hitrate").unwrap();
+        // hit_rate = read / (input + read) = 500 / 1000 = 0.5
+        assert!(
+            (stats.cache_hit_rate - 0.5).abs() < 1e-6,
+            "expected 50% hit rate, got {:.4}", stats.cache_hit_rate
+        );
+    }
+
+    #[test]
+    fn get_session_stats_large_write_does_not_deflate_cache_hit_rate() {
+        // Regression test: cache_write should NOT be in the cache hit rate denominator
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-hitrate-write");
+        db.upsert_session(&s).unwrap();
+
+        let mut t = make_turn("t-hitrate-wr", "s-hitrate-write", 0);
+        t.input_tokens = 500;
+        t.cache_read_tokens = 500;
+        t.cache_write_tokens = 1_000_000; // huge write — must not deflate rate
+        db.upsert_turn(&t).unwrap();
+
+        let stats = db.get_session_stats("s-hitrate-write").unwrap();
+        // Without the bug fix: 500 / (500 + 500 + 1_000_000) ≈ 0.000499 (BUG)
+        // With correct formula:  500 / (500 + 500) = 0.5
+        assert!(
+            (stats.cache_hit_rate - 0.5).abs() < 1e-6,
+            "cache_write inflated denominator: expected 0.5, got {:.6}", stats.cache_hit_rate
+        );
+    }
+
+    // ── list_session_summaries — cost must be non-zero when turns have cost ───
+
+    #[test]
+    fn list_session_summaries_returns_nonzero_cost() {
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-summary-cost");
+        db.upsert_session(&s).unwrap();
+
+        let mut t = make_turn("t-summary-cost-1", "s-summary-cost", 0);
+        t.estimated_cost_usd = 0.42;
+        db.upsert_turn(&t).unwrap();
+
+        let summaries = db.list_session_summaries(10).unwrap();
+        let sum = summaries.iter().find(|s| s.session_id == "s-summary-cost");
+        assert!(sum.is_some(), "session must appear in summaries");
+        let sum = sum.unwrap();
+        assert!(
+            sum.estimated_cost_usd > 0.0,
+            "cost must be non-zero, got {}", sum.estimated_cost_usd
+        );
+        assert!(
+            (sum.estimated_cost_usd - 0.42).abs() < 1e-6,
+            "expected $0.42, got ${}", sum.estimated_cost_usd
+        );
+    }
+
+    #[test]
+    fn list_session_summaries_cache_hit_rate_nonzero_when_cache_active() {
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-summary-hitrate");
+        db.upsert_session(&s).unwrap();
+
+        let mut t = make_turn("t-summary-hitrate", "s-summary-hitrate", 0);
+        t.input_tokens = 200;
+        t.cache_read_tokens = 800;
+        t.cache_write_tokens = 0;
+        t.estimated_cost_usd = 0.01;
+        db.upsert_turn(&t).unwrap();
+
+        let summaries = db.list_session_summaries(10).unwrap();
+        let sum = summaries.iter().find(|s| s.session_id == "s-summary-hitrate").unwrap();
+        // hit_rate = 800 / (200 + 800) = 0.8
+        assert!(
+            (sum.cache_hit_rate - 0.8).abs() < 1e-6,
+            "expected 80% hit rate, got {:.4}", sum.cache_hit_rate
+        );
+    }
+
+    // ── get_stats_by_provider — must return correct groupings ────────────────
+
+    #[test]
+    fn get_stats_by_provider_empty_db_returns_empty_map() {
+        let db = Database::open_in_memory().unwrap();
+        let map = db.get_stats_by_provider().unwrap();
+        assert!(map.is_empty(), "empty DB should yield empty provider map");
+    }
+
+    #[test]
+    fn get_stats_by_provider_groups_by_provider_correctly() {
+        let db = Database::open_in_memory().unwrap();
+        for i in 0..3 {
+            let mut s = make_session(&format!("s-provider-claude-{i}"));
+            s.provider = "claude-code".to_string();
+            db.upsert_session(&s).unwrap();
+        }
+        for i in 0..2 {
+            let mut s = make_session(&format!("s-provider-copilot-{i}"));
+            s.provider = "copilot-cli".to_string();
+            db.upsert_session(&s).unwrap();
+        }
+
+        let map = db.get_stats_by_provider().unwrap();
+        assert!(map.contains_key("claude-code"), "must include claude-code");
+        assert!(map.contains_key("copilot-cli"), "must include copilot-cli");
+
+        let (claude_sessions, _) = map["claude-code"];
+        let (copilot_sessions, _) = map["copilot-cli"];
+        assert_eq!(claude_sessions, 3, "expected 3 claude sessions, got {claude_sessions}");
+        assert_eq!(copilot_sessions, 2, "expected 2 copilot sessions, got {copilot_sessions}");
+    }
+
+    // ── get_session_tool_breakdown — must return items when events exist ──────
+
+    #[test]
+    fn get_session_tool_breakdown_empty_when_no_events() {
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-tools-empty");
+        db.upsert_session(&s).unwrap();
+
+        let items = db.get_session_tool_breakdown("s-tools-empty").unwrap();
+        assert!(items.is_empty(), "no events → empty tool breakdown");
+    }
+
+    #[test]
+    fn get_session_tool_breakdown_returns_mcp_items() {
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-tools-mcp");
+        db.upsert_session(&s).unwrap();
+        let t = make_turn("t-tools-mcp-1", "s-tools-mcp", 0);
+        db.upsert_turn(&t).unwrap();
+        let tr = make_task_run("tr-tools-mcp-1", "s-tools-mcp");
+        db.upsert_task_run(&tr).unwrap();
+
+        for i in 0..3 {
+            let mut ev = make_interaction_event(
+                &format!("ie-mcp-{i}"),
+                "s-tools-mcp",
+                "t-tools-mcp-1",
+                "tr-tools-mcp-1",
+            );
+            ev.kind = "mcp".to_string();
+            ev.mcp_server = Some("gitnexus".to_string());
+            ev.mcp_tool = Some("query".to_string());
+            db.upsert_interaction_event(&ev).unwrap();
+        }
+
+        let items = db.get_session_tool_breakdown("s-tools-mcp").unwrap();
+        assert!(!items.is_empty(), "must return at least one item for MCP events");
+
+        let mcp_item = items.iter().find(|i| i.kind == "mcp");
+        assert!(mcp_item.is_some(), "must include an mcp kind item");
+        let mcp_item = mcp_item.unwrap();
+        assert_eq!(mcp_item.server, "gitnexus");
+        assert_eq!(mcp_item.name, "query");
+        assert_eq!(mcp_item.count, 3, "must count all 3 events, got {}", mcp_item.count);
+    }
+
+    #[test]
+    fn get_session_tool_breakdown_isolates_by_session() {
+        // Events from session B must NOT appear in session A's breakdown
+        let db = Database::open_in_memory().unwrap();
+        let sa = make_session("s-tools-iso-a");
+        let sb = make_session("s-tools-iso-b");
+        db.upsert_session(&sa).unwrap();
+        db.upsert_session(&sb).unwrap();
+
+        let ta = make_turn("t-iso-a", "s-tools-iso-a", 0);
+        let tb = make_turn("t-iso-b", "s-tools-iso-b", 0);
+        db.upsert_turn(&ta).unwrap();
+        db.upsert_turn(&tb).unwrap();
+
+        let tr_a = make_task_run("tr-iso-a", "s-tools-iso-a");
+        let tr_b = make_task_run("tr-iso-b", "s-tools-iso-b");
+        db.upsert_task_run(&tr_a).unwrap();
+        db.upsert_task_run(&tr_b).unwrap();
+
+        let mut ev_b = make_interaction_event("ie-iso-b", "s-tools-iso-b", "t-iso-b", "tr-iso-b");
+        ev_b.kind = "tool".to_string();
+        ev_b.name = "bash".to_string();
+        ev_b.mcp_server = None;
+        ev_b.mcp_tool = None;
+        db.upsert_interaction_event(&ev_b).unwrap();
+
+        let items_a = db.get_session_tool_breakdown("s-tools-iso-a").unwrap();
+        assert!(items_a.is_empty(), "session A must not see session B events");
+    }
+
+    // ── get_session_aggregates matches get_session_stats for aggregate fields ─
+
+    #[test]
+    fn aggregates_and_stats_agree_on_token_counts() {
+        let db = Database::open_in_memory().unwrap();
+        let s = make_session("s-agg-match");
+        db.upsert_session(&s).unwrap();
+
+        for i in 0..4 {
+            let mut t = make_turn(&format!("t-agg-{i}"), "s-agg-match", i as i64);
+            t.input_tokens = 250;
+            t.output_tokens = 100;
+            t.cache_read_tokens = 50;
+            t.cache_write_tokens = 25;
+            t.estimated_cost_usd = 0.002;
+            db.upsert_turn(&t).unwrap();
+        }
+
+        let stats = db.get_session_stats("s-agg-match").unwrap();
+        let agg = db.get_session_aggregates("s-agg-match").unwrap();
+
+        assert_eq!(stats.total_turns, agg.total_turns, "total_turns must match");
+        assert_eq!(stats.total_input_tokens, agg.total_input_tokens, "input tokens must match");
+        assert_eq!(stats.total_output_tokens, agg.total_output_tokens, "output tokens must match");
+        assert_eq!(stats.total_cache_read_tokens, agg.total_cache_read_tokens);
+        assert_eq!(stats.total_cache_write_tokens, agg.total_cache_write_tokens);
+        assert!(
+            (stats.estimated_cost_usd - agg.estimated_cost_usd).abs() < 1e-9,
+            "cost mismatch: stats={}, agg={}", stats.estimated_cost_usd, agg.estimated_cost_usd
+        );
     }
 }

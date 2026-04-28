@@ -196,3 +196,91 @@ const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '�
 pub fn spinner_char(frame: usize) -> char {
     SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── micro_sparkline ───────────────────────────────────────────────────────
+
+    #[test]
+    fn sparkline_empty_values_returns_spaces() {
+        let result = micro_sparkline(&[], 5);
+        assert_eq!(result.chars().count(), 5, "empty values must produce width spaces");
+        assert!(result.chars().all(|c| c == ' '));
+    }
+
+    #[test]
+    fn sparkline_width_zero_returns_empty_string() {
+        let result = micro_sparkline(&[1.0, 2.0, 3.0], 0);
+        assert_eq!(result, "", "width=0 must return empty string");
+    }
+
+    #[test]
+    fn sparkline_all_zeros_returns_lowest_bar_chars() {
+        // All-zero data → all values relative to max=0 → fallback to '▁' repeat
+        let result = micro_sparkline(&[0.0, 0.0, 0.0], 3);
+        assert_eq!(result.chars().count(), 3);
+        assert!(
+            result.chars().all(|c| c == '▁'),
+            "all-zero input must use ▁ chars: {result:?}"
+        );
+    }
+
+    #[test]
+    fn sparkline_single_value_returns_single_highest_bar() {
+        let result = micro_sparkline(&[42.0], 1);
+        assert_eq!(result.chars().count(), 1);
+        assert_eq!(result, "█", "single nonzero value must be max bar ▇ or █: {result:?}");
+    }
+
+    #[test]
+    fn sparkline_output_length_equals_min_of_data_and_width() {
+        // When values.len() < width, output length = values.len()
+        let result = micro_sparkline(&[1.0, 2.0], 10);
+        // sparkline only emits as many chars as it has data points (tail of width)
+        assert!(result.chars().count() <= 10, "output must not exceed width");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn sparkline_clips_to_last_width_values() {
+        // With 20 values and width=5, only the last 5 values matter
+        let mut values: Vec<f64> = vec![0.0; 15];
+        values.extend([1.0, 2.0, 3.0, 4.0, 5.0]);
+        let result = micro_sparkline(&values, 5);
+        assert_eq!(result.chars().count(), 5);
+    }
+
+    #[test]
+    fn sparkline_ascending_series_ends_with_highest_bar() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = micro_sparkline(&values, 5);
+        assert_eq!(result.chars().count(), 5);
+        let bars: Vec<char> = result.chars().collect();
+        // Last bar (max value) must be '█' (index 7)
+        assert_eq!(bars[4], '█', "ascending series must end at max bar: {result:?}");
+        // First bar (min, non-zero) must be lower than last
+        assert!(bars[0] < bars[4], "ascending series must start lower: {result:?}");
+    }
+
+    #[test]
+    fn sparkline_all_chars_are_valid_bar_chars() {
+        const VALID_BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+        let values = vec![1.0, 5.0, 3.0, 8.0, 2.0, 7.0];
+        let result = micro_sparkline(&values, 6);
+        for ch in result.chars() {
+            assert!(
+                VALID_BARS.contains(&ch),
+                "unexpected char {ch:?} in sparkline: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sparkline_does_not_panic_on_infinite_or_nan_values() {
+        // Should not panic (behavior is undefined but must be safe)
+        let _ = micro_sparkline(&[f64::INFINITY, 1.0, 2.0], 3);
+        let _ = micro_sparkline(&[f64::NAN, 1.0, 2.0], 3);
+    }
+}

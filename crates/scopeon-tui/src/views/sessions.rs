@@ -2848,3 +2848,217 @@ fn fmt_k(n: i64) -> String {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── fill_bar ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn fill_bar_zero_ratio_all_empty() {
+        let bar = fill_bar(0.0, 10);
+        assert_eq!(bar.chars().count(), 10);
+        assert!(bar.chars().all(|c| c == '░'), "0.0 ratio must be all empty: {bar}");
+    }
+
+    #[test]
+    fn fill_bar_full_ratio_all_filled() {
+        let bar = fill_bar(1.0, 10);
+        assert_eq!(bar.chars().count(), 10);
+        assert!(bar.chars().all(|c| c == '█'), "1.0 ratio must be all filled: {bar}");
+    }
+
+    #[test]
+    fn fill_bar_half_ratio_half_filled() {
+        let bar = fill_bar(0.5, 10);
+        assert_eq!(bar.chars().count(), 10);
+        let filled = bar.chars().filter(|&c| c == '█').count();
+        let empty = bar.chars().filter(|&c| c == '░').count();
+        assert_eq!(filled, 5, "half ratio: expected 5 filled, got {filled}");
+        assert_eq!(empty, 5, "half ratio: expected 5 empty, got {empty}");
+    }
+
+    #[test]
+    fn fill_bar_over_one_clamps_to_full() {
+        // ratio > 1.0 must clamp — bar must not panic or produce wrong length
+        let bar = fill_bar(1.5, 8);
+        assert_eq!(bar.chars().count(), 8, "over-ratio bar must still be exactly width chars");
+        assert!(bar.chars().all(|c| c == '█'), "clamped ratio must be all filled: {bar}");
+    }
+
+    #[test]
+    fn fill_bar_width_zero_returns_empty_string() {
+        let bar = fill_bar(0.5, 0);
+        assert_eq!(bar, "", "width=0 must return empty string");
+    }
+
+    #[test]
+    fn fill_bar_width_one_filled() {
+        let bar = fill_bar(1.0, 1);
+        assert_eq!(bar, "█");
+    }
+
+    #[test]
+    fn fill_bar_width_one_empty() {
+        let bar = fill_bar(0.0, 1);
+        assert_eq!(bar, "░");
+    }
+
+    #[test]
+    fn fill_bar_total_chars_always_equals_width() {
+        for width in [0, 1, 5, 10, 20, 40] {
+            for ratio_tenth in [0, 1, 3, 5, 7, 9, 10, 15] {
+                let ratio = ratio_tenth as f64 / 10.0;
+                let bar = fill_bar(ratio, width);
+                assert_eq!(
+                    bar.chars().count(), width,
+                    "fill_bar({ratio}, {width}).chars().count() != {width}"
+                );
+            }
+        }
+    }
+
+    // ── fmt_k ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn fmt_k_zero_returns_zero_string() {
+        assert_eq!(fmt_k(0), "0");
+    }
+
+    #[test]
+    fn fmt_k_below_thousand_returns_plain_number() {
+        assert_eq!(fmt_k(999), "999");
+        assert_eq!(fmt_k(1), "1");
+        assert_eq!(fmt_k(100), "100");
+    }
+
+    #[test]
+    fn fmt_k_exactly_thousand_returns_k_notation() {
+        let result = fmt_k(1000);
+        assert!(result.ends_with('k'), "1000 must show as xk: {result}");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn fmt_k_never_empty_for_any_nonnegative_input() {
+        for n in [0_i64, 1, 999, 1000, 1001, 999_999, 1_000_000, 1_500_000, i64::MAX / 2] {
+            let result = fmt_k(n);
+            assert!(!result.is_empty(), "fmt_k({n}) returned empty string");
+        }
+    }
+
+    #[test]
+    fn fmt_k_million_uses_m_notation() {
+        let result = fmt_k(1_000_000);
+        assert!(result.ends_with('M'), "1M must use M notation: {result}");
+    }
+
+    #[test]
+    fn fmt_k_1_5_million() {
+        let result = fmt_k(1_500_000);
+        assert_eq!(result, "1.5M");
+    }
+
+    #[test]
+    fn fmt_k_thresholds_are_consistent() {
+        // 999 → plain, 1000 → k notation
+        let below = fmt_k(999);
+        let above = fmt_k(1000);
+        assert!(!below.contains('k'), "999 must not use k: {below}");
+        assert!(above.contains('k'), "1000 must use k: {above}");
+    }
+
+    // ── shorten_model ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn shorten_model_never_exceeds_14_chars() {
+        let models = [
+            "claude-opus-4-5-20251101",
+            "claude-sonnet-4-5-20251201",
+            "claude-haiku-4-5-20251001",
+            "gpt-4o-mini-2024-07-18",
+            "gemini-1.5-pro-latest",
+            "a-very-long-model-name-that-exceeds-limits",
+        ];
+        for model in models {
+            let result = shorten_model(model);
+            assert!(
+                result.chars().count() <= 14,
+                "shorten_model({model:?}) = {result:?} exceeds 14 chars"
+            );
+        }
+    }
+
+    #[test]
+    fn shorten_model_strips_claude_prefix() {
+        // "claude-opus-4-5..." → "opus-4" (prefix stripped)
+        let result = shorten_model("claude-opus-4-5-20251101");
+        assert!(!result.starts_with("claude-"), "should strip 'claude-' prefix: {result}");
+    }
+
+    #[test]
+    fn shorten_model_never_empty_for_any_nonempty_input() {
+        let models = [
+            "claude-sonnet-4-5",
+            "gpt-4o",
+            "unknown-model-xyz",
+            "x",
+        ];
+        for model in models {
+            let result = shorten_model(model);
+            assert!(!result.is_empty(), "shorten_model({model:?}) returned empty string");
+        }
+    }
+
+    #[test]
+    fn shorten_model_gpt_prefix_preserved_up_to_14_chars() {
+        let result = shorten_model("gpt-4o");
+        assert!(result.starts_with("gpt-"), "gpt prefix should be preserved: {result}");
+        assert!(result.chars().count() <= 14);
+    }
+
+    // ── week_trend_str ────────────────────────────────────────────────────────
+
+    #[test]
+    fn week_trend_str_zero_both_returns_empty() {
+        let result = week_trend_str(0.0, 0.0);
+        assert_eq!(result, "", "zero/zero should return empty string, got: {result:?}");
+    }
+
+    #[test]
+    fn week_trend_str_new_this_week_no_prev() {
+        let result = week_trend_str(5.0, 0.0);
+        assert!(!result.is_empty(), "new spend with no prev week must return non-empty string");
+        assert!(result.contains("new"), "should mention 'new': {result}");
+    }
+
+    #[test]
+    fn week_trend_str_big_increase_shows_up_arrow() {
+        let result = week_trend_str(100.0, 50.0); // +100%
+        assert!(result.contains('↑'), "100% increase must show ↑: {result}");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn week_trend_str_big_decrease_shows_down_arrow() {
+        let result = week_trend_str(10.0, 100.0); // -90%
+        assert!(result.contains('↓'), "90% decrease must show ↓: {result}");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn week_trend_str_stable_shows_stable_indicator() {
+        let result = week_trend_str(10.0, 10.5); // ~5% delta — stable
+        assert!(result.contains('≈') || result.to_lowercase().contains("stable"),
+            "small delta must show stable indicator: {result}");
+    }
+
+    #[test]
+    fn week_trend_str_never_panics_on_extreme_values() {
+        // Should not panic on large/small floats
+        let _ = week_trend_str(f64::MAX / 2.0, 1.0);
+        let _ = week_trend_str(0.0, f64::MAX / 2.0);
+        let _ = week_trend_str(1.0, f64::MIN_POSITIVE);
+    }
+}
