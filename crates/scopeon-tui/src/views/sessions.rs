@@ -2078,109 +2078,174 @@ fn draw_tools_section(f: &mut Frame, app: &App, tools: &[ToolBreakdownItem], are
     let m = app.theme.muted_color();
     let accent = app.theme.accent_color();
     let warn = app.theme.warning_color();
+    let sec = app.theme.text_secondary();
+    let pri = app.theme.text_primary();
 
-    // Group MCPs by server
-    let mut mcp_map: std::collections::BTreeMap<String, (i64, Vec<String>)> =
+    // Group by kind
+    let mut mcp_map: std::collections::BTreeMap<String, Vec<(String, i64)>> =
         std::collections::BTreeMap::new();
-    let mut tool_parts: Vec<String> = Vec::new();
-    let mut hook_parts: Vec<String> = Vec::new();
-    let mut skill_parts: Vec<String> = Vec::new();
+    let mut tool_items: Vec<(String, i64)> = Vec::new();
+    let mut hook_items: Vec<(String, i64)> = Vec::new();
+    let mut skill_items: Vec<(String, i64)> = Vec::new();
     let mut subagent_count: i64 = 0;
     let mut compaction_count: i64 = 0;
 
     for item in tools {
         match item.kind.as_str() {
             "mcp" => {
-                let e = mcp_map.entry(item.server.clone()).or_insert((0, Vec::new()));
-                e.0 += item.count;
-                if e.1.len() < 5 {
-                    e.1.push(format!("{}({})", item.name, item.count));
-                }
+                mcp_map.entry(item.server.clone())
+                    .or_default()
+                    .push((item.name.clone(), item.count));
             },
-            "tool" => tool_parts.push(format!("{}({})", item.name, item.count)),
-            "hook" => hook_parts.push(format!("{}({})", item.name, item.count)),
-            "skill" => skill_parts.push(format!("{}({})", item.name, item.count)),
+            "tool"     => tool_items.push((item.name.clone(), item.count)),
+            "hook"     => hook_items.push((item.name.clone(), item.count)),
+            "skill"    => skill_items.push((item.name.clone(), item.count)),
             "subagent" => subagent_count += item.count,
             "compaction" => compaction_count += item.count,
             _ => {},
         }
     }
 
+    // Sort each tool list by count desc (already ordered from DB, but make explicit)
+    tool_items.sort_by(|a, b| b.1.cmp(&a.1));
+    hook_items.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Build vertical lines
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let inner_w = area.width.saturating_sub(4) as usize; // 2 border + 2 indent
 
-    // MCP servers
-    for (srv, (cnt, tool_list)) in &mcp_map {
-        let mut spans = vec![
-            Span::styled("  MCP  ", Style::default().fg(m)),
-            Span::styled(
-                format!("{:<20}", truncate_with_ellipsis(srv, 20)),
-                Style::default().fg(accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!(" {}×  ", cnt), Style::default().fg(m)),
-        ];
-        spans.push(Span::styled(tool_list.join("  "), Style::default().fg(app.theme.text_secondary())));
-        lines.push(Line::from(spans));
-    }
-
-    // Built-in tools
-    if !tool_parts.is_empty() {
-        let w = area.width.saturating_sub(12) as usize;
-        let tool_str = truncate_with_ellipsis(&tool_parts.join("  "), w);
-        lines.push(Line::from(vec![
-            Span::styled("  Tools  ", Style::default().fg(m)),
-            Span::styled(tool_str, Style::default().fg(app.theme.text_primary())),
-        ]));
-    }
-
-    // Hooks
-    if !hook_parts.is_empty() {
-        let w = area.width.saturating_sub(12) as usize;
-        let hook_str = truncate_with_ellipsis(&hook_parts.join("  "), w);
-        lines.push(Line::from(vec![
-            Span::styled("  Hooks  ", Style::default().fg(m)),
-            Span::styled(hook_str, Style::default().fg(m)),
-        ]));
-    }
-
-    // Skills / subagents / compactions
-    {
-        let mut spans = vec![Span::styled("  ", Style::default())];
-        if !skill_parts.is_empty() {
-            spans.push(Span::styled("Skills  ", Style::default().fg(m)));
-            spans.push(Span::styled(skill_parts.join("  "), Style::default().fg(warn)));
-            spans.push(Span::styled("  ", Style::default()));
-        } else {
-            spans.push(Span::styled("Skills —  ", Style::default().fg(m)));
+    // ── MCP Servers ──────────────────────────────────────────────────────────
+    if !mcp_map.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  MCP Servers",
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        )));
+        for (srv, mut tool_list) in mcp_map {
+            tool_list.sort_by(|a, b| b.1.cmp(&a.1));
+            let total: i64 = tool_list.iter().map(|t| t.1).sum();
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default()),
+                Span::styled(
+                    truncate_with_ellipsis(&srv, inner_w.saturating_sub(12)),
+                    Style::default().fg(accent).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("  {} calls", total), Style::default().fg(m)),
+            ]));
+            for (i, (name, count)) in tool_list.iter().enumerate() {
+                let prefix = if i + 1 < tool_list.len() { "      ├ " } else { "      └ " };
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(m)),
+                    Span::styled(
+                        truncate_with_ellipsis(name, inner_w.saturating_sub(16)),
+                        Style::default().fg(sec),
+                    ),
+                    Span::styled(format!("  {}", count), Style::default().fg(m)),
+                ]));
+            }
         }
+        lines.push(Line::from(Span::styled("", Style::default()))); // spacer
+    }
+
+    // ── Built-in Tools ───────────────────────────────────────────────────────
+    if !tool_items.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Built-in Tools",
+            Style::default().fg(pri).add_modifier(Modifier::BOLD),
+        )));
+        for (name, count) in &tool_items {
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default()),
+                Span::styled(
+                    truncate_with_ellipsis(name, inner_w.saturating_sub(10)),
+                    Style::default().fg(pri),
+                ),
+                Span::styled(format!("  {}", count), Style::default().fg(m)),
+            ]));
+        }
+        lines.push(Line::from(Span::styled("", Style::default())));
+    }
+
+    // ── Hooks ────────────────────────────────────────────────────────────────
+    if !hook_items.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Hooks",
+            Style::default().fg(m).add_modifier(Modifier::BOLD),
+        )));
+        for (name, count) in &hook_items {
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default()),
+                Span::styled(
+                    truncate_with_ellipsis(name, inner_w.saturating_sub(10)),
+                    Style::default().fg(m),
+                ),
+                Span::styled(format!("  {}", count), Style::default().fg(m)),
+            ]));
+        }
+        lines.push(Line::from(Span::styled("", Style::default())));
+    }
+
+    // ── Skills ───────────────────────────────────────────────────────────────
+    if !skill_items.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Skills",
+            Style::default().fg(warn).add_modifier(Modifier::BOLD),
+        )));
+        for (name, count) in &skill_items {
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default()),
+                Span::styled(
+                    truncate_with_ellipsis(name, inner_w.saturating_sub(10)),
+                    Style::default().fg(warn),
+                ),
+                Span::styled(format!("  {}", count), Style::default().fg(m)),
+            ]));
+        }
+        lines.push(Line::from(Span::styled("", Style::default())));
+    }
+
+    // ── Footer: subagents / compactions ──────────────────────────────────────
+    if subagent_count > 0 || compaction_count > 0 {
+        let mut spans = vec![Span::styled("  ", Style::default())];
         if subagent_count > 0 {
             spans.push(Span::styled("Subagents  ", Style::default().fg(m)));
-            spans.push(Span::styled(
-                subagent_count.to_string(),
-                Style::default().fg(accent),
-            ));
-            spans.push(Span::styled("  ", Style::default()));
+            spans.push(Span::styled(subagent_count.to_string(), Style::default().fg(accent)));
+            spans.push(Span::styled("   ", Style::default()));
         }
         if compaction_count > 0 {
             spans.push(Span::styled("Compactions  ", Style::default().fg(m)));
-            spans.push(Span::styled(
-                compaction_count.to_string(),
-                Style::default().fg(warn),
-            ));
+            spans.push(Span::styled(compaction_count.to_string(), Style::default().fg(warn)));
         }
         lines.push(Line::from(spans));
     }
 
     if lines.is_empty() {
-        lines.push(Line::from(Span::styled("  No interaction events recorded for this session.", Style::default().fg(m))));
+        lines.push(Line::from(Span::styled(
+            "  No interaction events recorded for this session.",
+            Style::default().fg(m),
+        )));
     }
 
+    // Scrollable rendering — use turn_scroll_detail as offset
+    let border_h = 2u16;
+    let visible_h = area.height.saturating_sub(border_h) as usize;
+    let total = lines.len();
+    let scroll = app.turn_scroll_detail.min(total.saturating_sub(1));
+    let visible_lines: Vec<Line<'static>> = lines.into_iter().skip(scroll).take(visible_h).collect();
+
+    // Build title with scroll indicator
+    let title = if total > visible_h {
+        format!(" MCP & Skills  ↑↓ scroll  {}/{} ", scroll + 1, total)
+    } else {
+        " MCP & Skills ".to_string()
+    };
+
     f.render_widget(
-        Paragraph::new(lines).block(
+        Paragraph::new(visible_lines).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(app.theme.border_type())
                 .border_style(app.theme.inactive_border_style())
-                .title(" MCP & Skills "),
+                .title(title),
         ),
         area,
     );
@@ -2675,11 +2740,13 @@ fn draw_detail_header(
         None
     };
 
-    // Line 5: nav hint  (this header is used in fullscreen detail mode)
-    let hint_line = Line::from(vec![Span::styled(
-        "  [ ]: sections  ·  Esc: back  ·  ↑↓: scroll  ·  ← →: replay",
-        Style::default().fg(m),
-    )]);
+    // Line 5: nav hint — contextual based on active section
+    let hint_text = match app.detail_section {
+        DetailSection::Turns    => "  [ ]: sections  ·  Esc: back  ·  ↑↓: scroll  ·  ← →: replay",
+        DetailSection::McpSkills => "  [ ]: sections  ·  Esc: back  ·  ↑↓: scroll",
+        DetailSection::Context  => "  [ ]: sections  ·  Esc: back",
+    };
+    let hint_line = Line::from(vec![Span::styled(hint_text, Style::default().fg(m))]);
 
     let mut lines = vec![
         Line::from(line1),
@@ -2747,7 +2814,12 @@ fn draw_session_detail_fullscreen(f: &mut Frame, app: &App, area: Rect) {
         bar_spans.push(Span::styled(label, style));
         bar_spans.push(Span::styled("   ", Style::default()));
     }
-    bar_spans.push(Span::styled("  [ ]: sections  ·  Esc: back", Style::default().fg(m)));
+    let bar_hint = match app.detail_section {
+        DetailSection::Turns     => "  [ ]: sections  ·  Esc: back  ·  ← →: replay",
+        DetailSection::McpSkills => "  [ ]: sections  ·  Esc: back  ·  ↑↓: scroll",
+        DetailSection::Context   => "  [ ]: sections  ·  Esc: back",
+    };
+    bar_spans.push(Span::styled(bar_hint, Style::default().fg(m)));
     f.render_widget(Paragraph::new(Line::from(bar_spans)), v[1]);
 
     // ── Section content ───────────────────────────────────────────────────────
