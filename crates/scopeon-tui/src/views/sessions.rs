@@ -4,7 +4,7 @@
 //! Below: scrollable session list (newest first), selectable with ↑↓.
 //! Enter: full-screen session detail (turns table + compact header).
 //! /: filter sessions. s: cycle sort order. []: provider scope. {}: model scope.
-//! t: toggle Trends chart. Tab (in detail): cycle Turns / Context / MCP & Skills.
+//! t: toggle Trends chart. [ / ] (in detail): cycle Turns / Context / MCP & Skills.
 
 use std::collections::HashMap;
 
@@ -2190,18 +2190,26 @@ fn draw_tools_section(f: &mut Frame, app: &App, tools: &[ToolBreakdownItem], are
 
 fn draw_context_section(f: &mut Frame, app: &App, stats: &SessionStats, area: Rect) {
     let m = app.theme.muted_color();
+    let spark_w = area.width.saturating_sub(6) as usize;
 
-    let total_tokens = stats.total_input_tokens + stats.total_cache_read_tokens;
-    if total_tokens == 0 {
-        let p = Paragraph::new(Line::from(Span::styled(
-            "  No token data available for this session (copilot-cli sessions do not record tokens).",
-            Style::default().fg(m),
-        )))
-        .block(Block::default().borders(Borders::ALL).border_type(app.theme.border_type()).title(" Context "));
-        f.render_widget(p, area);
-        return;
+    let has_token_data = stats.total_input_tokens + stats.total_cache_read_tokens > 0;
+
+    if has_token_data {
+        draw_context_token_view(f, app, stats, area, m, spark_w);
+    } else {
+        draw_context_activity_view(f, app, stats, area, m, spark_w);
     }
+}
 
+/// Context window fill view — shown when provider reports input/cache token data (e.g. claude-code).
+fn draw_context_token_view(
+    f: &mut Frame,
+    app: &App,
+    stats: &SessionStats,
+    area: Rect,
+    m: Color,
+    spark_w: usize,
+) {
     let ctx_window = stats.session.as_ref()
         .and_then(|s| s.context_window_tokens)
         .unwrap_or_else(|| {
@@ -2212,9 +2220,7 @@ fn draw_context_section(f: &mut Frame, app: &App, stats: &SessionStats, area: Re
         .map(|t| {
             if ctx_window > 0 {
                 (t.input_tokens + t.cache_read_tokens) as f64 / ctx_window as f64 * 100.0
-            } else {
-                0.0
-            }
+            } else { 0.0 }
         })
         .collect();
 
@@ -2224,28 +2230,20 @@ fn draw_context_section(f: &mut Frame, app: &App, stats: &SessionStats, area: Re
         .unwrap_or(0);
     let peak_pct = if ctx_window > 0 {
         peak_ctx_tokens as f64 / ctx_window as f64 * 100.0
-    } else {
-        0.0
-    };
+    } else { 0.0 };
     let ctx_col = app.theme.context_color(peak_pct);
     let compaction_count = stats.turns.iter().filter(|t| t.is_compaction_event).count();
     let cache_write_total: i64 = stats.turns.iter().map(|t| t.cache_write_tokens).sum();
-
-    let bar_w = 18usize;
-    let peak_bar = fill_bar(peak_pct / 100.0, bar_w);
-    let spark_w = area.width.saturating_sub(6) as usize;
-
     let provider = stats.session.as_ref().map(|s| s.provider.as_str()).unwrap_or("");
+
+    let peak_bar = fill_bar(peak_pct / 100.0, 18);
 
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(vec![
             Span::styled("  Peak  ", Style::default().fg(m)),
             Span::styled(peak_bar, Style::default().fg(ctx_col)),
             Span::styled(
-                format!(" {:.1}%  ({} / {}k)",
-                    peak_pct,
-                    fmt_k(peak_ctx_tokens),
-                    ctx_window / 1000),
+                format!(" {:.1}%  ({} / {}k)", peak_pct, fmt_k(peak_ctx_tokens), ctx_window / 1000),
                 Style::default().fg(ctx_col).add_modifier(Modifier::BOLD),
             ),
             if compaction_count > 0 {
@@ -2253,16 +2251,11 @@ fn draw_context_section(f: &mut Frame, app: &App, stats: &SessionStats, area: Re
                     format!("   ⟳ compacted {}×", compaction_count),
                     Style::default().fg(app.theme.warning_color()),
                 )
-            } else {
-                Span::styled("", Style::default())
-            },
+            } else { Span::styled("", Style::default()) },
         ]),
         Line::from(vec![
             Span::styled("  ", Style::default()),
-            Span::styled(
-                micro_sparkline(&ctx_series, spark_w.max(8)),
-                Style::default().fg(ctx_col),
-            ),
+            Span::styled(micro_sparkline(&ctx_series, spark_w.max(8)), Style::default().fg(ctx_col)),
             Span::styled("  ctx% per turn", Style::default().fg(m)),
         ]),
     ];
@@ -2297,6 +2290,121 @@ fn draw_context_section(f: &mut Frame, app: &App, stats: &SessionStats, area: Re
                 .border_type(app.theme.border_type())
                 .border_style(app.theme.inactive_border_style())
                 .title(" Context Buildup "),
+        ),
+        area,
+    );
+}
+
+/// Activity timeline view — shown when provider doesn't report token data (e.g. copilot-cli).
+/// Uses output_tokens (response size), duration_ms (response time), and mcp_call_count.
+fn draw_context_activity_view(
+    f: &mut Frame,
+    app: &App,
+    stats: &SessionStats,
+    area: Rect,
+    m: Color,
+    spark_w: usize,
+) {
+    let t = app.theme;
+
+    if stats.turns.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled("  No turn data recorded for this session.", Style::default().fg(m))))
+                .block(Block::default().borders(Borders::ALL).border_type(t.border_type()).title(" Activity ")),
+            area,
+        );
+        return;
+    }
+
+    // Build per-turn series
+    let out_series: Vec<f64> = stats.turns.iter().map(|t| t.output_tokens as f64).collect();
+    let dur_series: Vec<f64> = stats.turns.iter()
+        .map(|t| t.duration_ms.unwrap_or(0) as f64 / 1000.0)
+        .collect();
+    let mcp_series: Vec<f64> = stats.turns.iter().map(|t| t.mcp_call_count as f64).collect();
+
+    // Summary stats
+    let peak_output = stats.turns.iter().map(|t| t.output_tokens).max().unwrap_or(0);
+    let avg_output = if stats.turns.is_empty() { 0 } else {
+        stats.turns.iter().map(|t| t.output_tokens).sum::<i64>() / stats.turns.len() as i64
+    };
+    let peak_dur_ms = stats.turns.iter().map(|t| t.duration_ms.unwrap_or(0)).max().unwrap_or(0);
+    let total_dur_ms: i64 = stats.turns.iter().map(|t| t.duration_ms.unwrap_or(0)).sum();
+    let total_mcp: i64 = stats.turns.iter().map(|t| t.mcp_call_count).sum();
+    let turn_count = stats.turns.len();
+
+    // Normalise output bar (peak = 100%)
+    let out_pct = if peak_output > 0 {
+        avg_output as f64 / peak_output as f64
+    } else { 0.0 };
+    let out_bar = fill_bar(out_pct, 14);
+    let out_col = t.accent_color();
+    let dur_col = t.warning_color();
+    let mcp_col = t.cost_color();
+
+    let fmt_dur = |ms: i64| -> String {
+        if ms >= 60_000 { format!("{:.1}m", ms as f64 / 60_000.0) }
+        else { format!("{:.1}s", ms as f64 / 1000.0) }
+    };
+
+    let lines: Vec<Line<'static>> = vec![
+        // Row 1: output tokens sparkline
+        Line::from(vec![
+            Span::styled("  Output  ", Style::default().fg(m)),
+            Span::styled(out_bar, Style::default().fg(out_col)),
+            Span::styled(
+                format!("  avg {}  peak {}  across {} turns",
+                    fmt_k(avg_output), fmt_k(peak_output), turn_count),
+                Style::default().fg(out_col).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(micro_sparkline(&out_series, spark_w.max(8)), Style::default().fg(out_col)),
+            Span::styled("  tokens/turn", Style::default().fg(m)),
+        ]),
+        // Row 3: response time
+        Line::from(vec![
+            Span::styled("  Time    ", Style::default().fg(m)),
+            Span::styled(
+                format!("avg {}  peak {}  total {}",
+                    fmt_dur(if turn_count > 0 { total_dur_ms / turn_count as i64 } else { 0 }),
+                    fmt_dur(peak_dur_ms),
+                    fmt_dur(total_dur_ms)),
+                Style::default().fg(dur_col),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(micro_sparkline(&dur_series, spark_w.max(8)), Style::default().fg(dur_col)),
+            Span::styled("  seconds/turn", Style::default().fg(m)),
+        ]),
+        // Row 5: MCP calls (only if any)
+        if total_mcp > 0 {
+            Line::from(vec![
+                Span::styled("  Tools   ", Style::default().fg(m)),
+                Span::styled(
+                    format!("{} tool calls  ", total_mcp),
+                    Style::default().fg(mcp_col).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    micro_sparkline(&mcp_series, spark_w.saturating_sub(20).max(8)),
+                    Style::default().fg(mcp_col),
+                ),
+                Span::styled("  calls/turn", Style::default().fg(m)),
+            ])
+        } else {
+            Line::from(Span::styled("", Style::default()))
+        },
+    ];
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(t.border_type())
+                .border_style(t.inactive_border_style())
+                .title(" Activity Timeline "),
         ),
         area,
     );
@@ -2569,7 +2677,7 @@ fn draw_detail_header(
 
     // Line 5: nav hint  (this header is used in fullscreen detail mode)
     let hint_line = Line::from(vec![Span::styled(
-        "  Tab: sections  ·  Esc: back  ·  ↑↓: scroll  ·  ← →: replay",
+        "  [ ]: sections  ·  Esc: back  ·  ↑↓: scroll  ·  ← →: replay",
         Style::default().fg(m),
     )]);
 
@@ -2639,7 +2747,7 @@ fn draw_session_detail_fullscreen(f: &mut Frame, app: &App, area: Rect) {
         bar_spans.push(Span::styled(label, style));
         bar_spans.push(Span::styled("   ", Style::default()));
     }
-    bar_spans.push(Span::styled("  Tab: sections  ·  Esc: back", Style::default().fg(m)));
+    bar_spans.push(Span::styled("  [ ]: sections  ·  Esc: back", Style::default().fg(m)));
     f.render_widget(Paragraph::new(Line::from(bar_spans)), v[1]);
 
     // ── Section content ───────────────────────────────────────────────────────

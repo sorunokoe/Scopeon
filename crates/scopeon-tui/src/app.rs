@@ -99,6 +99,13 @@ impl DetailSection {
             DetailSection::McpSkills => DetailSection::Turns,
         }
     }
+    pub fn prev(self) -> Self {
+        match self {
+            DetailSection::Turns => DetailSection::McpSkills,
+            DetailSection::Context => DetailSection::Turns,
+            DetailSection::McpSkills => DetailSection::Context,
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             DetailSection::Turns => "Turns",
@@ -922,9 +929,13 @@ impl App {
                     self.replay_turn_idx = None;
                     self.detail_section = DetailSection::Turns;
                 },
-                // Tab cycles between Turns / Context / MCP & Skills sections
-                KeyCode::Tab => {
+                // [ / ] cycle between Turns / Context / MCP & Skills sections
+                KeyCode::Char(']') => {
                     self.detail_section = self.detail_section.next();
+                    self.turn_scroll_detail = 0;
+                },
+                KeyCode::Char('[') => {
+                    self.detail_section = self.detail_section.prev();
                     self.turn_scroll_detail = 0;
                 },
                 KeyCode::Down | KeyCode::Char('j') => {
