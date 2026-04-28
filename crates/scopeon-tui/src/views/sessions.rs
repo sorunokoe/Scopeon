@@ -1126,20 +1126,46 @@ fn draw_today_card(f: &mut Frame, app: &App, area: Rect) {
 fn draw_efficiency_card(f: &mut Frame, app: &App, area: Rect) {
     let t = app.theme;
 
-    // Prefer live-session cache rate (freshest); fall back to all-time from global stats.
-    let (cache_rate, scope_label) = if let Some(ls) = &app.live_stats {
-        (ls.cache_hit_rate, "live")
+    // Use live session cache rate only if that session actually has token data.
+    // Copilot-CLI sessions record 0 tokens, so falling through to global_stats
+    // gives the accurate all-time rate computed from sessions that do have tokens.
+    let live_has_tokens = app.live_stats.as_ref()
+        .map(|ls| ls.total_input_tokens + ls.total_cache_read_tokens + ls.total_cache_write_tokens > 0)
+        .unwrap_or(false);
+
+    // Compute all-time cache rate from session_summaries (same source as scoped views).
+    let summaries_cache_rate: f64 = {
+        let rates: Vec<f64> = app.session_summaries.values()
+            .map(|sm| sm.cache_hit_rate)
+            .filter(|&r| r > 0.0)
+            .collect();
+        if rates.is_empty() {
+            0.0
+        } else {
+            rates.iter().sum::<f64>() / rates.len() as f64
+        }
+    };
+
+    let (cache_rate, scope_label) = if live_has_tokens {
+        (app.live_stats.as_ref().unwrap().cache_hit_rate, "live")
     } else if let Some(gs) = &app.global_stats {
-        (gs.cache_hit_rate, "all-time")
+        // Prefer global_stats (weighted by tokens) if it has real data.
+        if gs.cache_hit_rate > 0.0 {
+            (gs.cache_hit_rate, "all-time")
+        } else {
+            (summaries_cache_rate, "all-time")
+        }
     } else {
-        (0.0, "")
+        (summaries_cache_rate, "all-time")
     };
 
     let cache_pct = cache_rate * 100.0;
     let cache_col = t.cache_color(cache_pct);
-    let cache_savings = app.live_stats.as_ref().map(|ls| ls.cache_savings_usd)
-        .or_else(|| app.global_stats.as_ref().map(|gs| gs.cache_savings_usd))
-        .unwrap_or(0.0);
+    let cache_savings = if live_has_tokens {
+        app.live_stats.as_ref().map(|ls| ls.cache_savings_usd).unwrap_or(0.0)
+    } else {
+        app.global_stats.as_ref().map(|gs| gs.cache_savings_usd).unwrap_or(0.0)
+    };
 
     let bar_w = (area.width.saturating_sub(12) as usize).clamp(8, 16);
     let cache_bar = fill_bar(cache_rate, bar_w);
