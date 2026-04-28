@@ -837,11 +837,8 @@ fn build_hints(app: &App) -> String {
                 .to_string()
         },
         Tab::Sessions => {
-            if app.all_providers.len() >= 2 {
-                " ↑↓:select  Enter:open  /:filter  s:sort  [ ]:provider  { }:model  Tab:tabs  ?:help  q:quit".to_string()
-            } else {
-                " ↑↓:select  Enter:detail  /:filter  s:sort  g/G:top/btm  ?:help  q:quit".to_string()
-            }
+            " ↑↓:select  Enter:open  /:filter  s:sort  [ ]:scope  Tab:tabs  ?:help  q:quit"
+                .to_string()
         },
         Tab::Spend => " 1-2:tabs  r:refresh  ?:help  q:quit".to_string(),
     }
@@ -1037,13 +1034,6 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
             )),
         ]),
         Row::new(vec![
-            Cell::from(Span::styled("  Esc", key_style)),
-            Cell::from(Span::styled(
-                "  Back from detail",
-                Style::default().fg(text),
-            )),
-        ]),
-        Row::new(vec![
             Cell::from(Span::styled("  /", key_style)),
             Cell::from(Span::styled("  Filter sessions", Style::default().fg(text))),
         ]),
@@ -1063,8 +1053,26 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
         ]),
         Row::new(vec![
             Cell::from(Span::styled("  Tab", key_style)),
+            Cell::from(Span::styled("  Switch tabs", Style::default().fg(text))),
+        ]),
+        Row::new(vec![
+            Cell::from(Span::styled("  [ ] / ]", key_style)),
             Cell::from(Span::styled(
-                "  Switch list ↔ detail pane",
+                "  Scope to prev / next provider (scope bar)",
+                Style::default().fg(text),
+            )),
+        ]),
+        Row::new(vec![
+            Cell::from(Span::styled("  { } / }", key_style)),
+            Cell::from(Span::styled(
+                "  Scope to prev / next model (when provider active)",
+                Style::default().fg(text),
+            )),
+        ]),
+        Row::new(vec![
+            Cell::from(Span::styled("  Esc", key_style)),
+            Cell::from(Span::styled(
+                "  Clear scope / back from detail",
                 Style::default().fg(text),
             )),
         ]),

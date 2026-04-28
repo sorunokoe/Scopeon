@@ -21,6 +21,20 @@ use crate::app::App;
 use crate::text::{truncate_to_chars, truncate_with_ellipsis};
 use crate::views::components::{empty_state_lines, themed_block, themed_block_borders};
 
+/// Returns the number of rows the scope selector bar will occupy.
+/// 0 when fewer than 2 providers (nothing to select), 1 for providers-only,
+/// 2 when a provider is scoped and 2+ models are available (or a model scope
+/// is active, which guards against any state where scope_model was set
+/// without a provider scope).
+pub(crate) fn compute_scope_h(app: &App) -> u16 {
+    if app.all_providers.len() < 2 {
+        return 0;
+    }
+    let model_row = (app.scope_provider.is_some() && app.all_models.len() >= 2)
+        || app.scope_model.is_some();
+    1 + model_row as u16
+}
+
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // Full-screen detail mode (Enter key)
     if app.session_detail_mode {
@@ -45,21 +59,270 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Overview cards (7 rows: 5 content + 2 borders).
-    // Shown when there's meaningful data and enough terminal height for a usable list below.
+    // Scope selector bar: 1 row (providers) or 2 rows (providers + models).
+    let scope_h = compute_scope_h(app);
+
+    // Overview cards: 7 rows (5 content + 2 borders).
+    // Threshold includes scope_h so the list always has ≥7 rows below.
     let has_data = app.budget.daily_spent > 0.0 || app.global_stats.is_some();
-    let cards_h = if has_data && area.height >= 14 { 7u16 } else { 0u16 };
+    let cards_h = if has_data && area.height >= 14 + scope_h { 7u16 } else { 0u16 };
+
+    // Build layout constraints dynamically.
+    let mut constraints: Vec<Constraint> = Vec::new();
+    if cards_h > 0 {
+        constraints.push(Constraint::Length(cards_h));
+    }
+    if scope_h > 0 {
+        constraints.push(Constraint::Length(scope_h));
+    }
+    constraints.push(Constraint::Min(0));
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(cards_h), Constraint::Min(0)])
+        .constraints(constraints)
         .split(area);
 
+    let mut chunk_idx = 0usize;
     if cards_h > 0 {
-        draw_overview_cards(f, app, chunks[0]);
+        draw_overview_cards(f, app, chunks[chunk_idx]);
+        chunk_idx += 1;
+    }
+    if scope_h > 0 {
+        draw_scope_bar(f, app, chunks[chunk_idx]);
+        chunk_idx += 1;
     }
 
-    draw_session_list(f, app, &sessions, chunks[1]);
+    draw_session_list(f, app, &sessions, chunks[chunk_idx]);
+}
+
+// ── Scope selector bar ────────────────────────────────────────────────────────
+//
+// A 1-2 row borderless strip between the overview cards and the session list.
+// Row 1: provider chips (always shown when 2+ providers exist).
+// Row 2: model chips (shown when a provider is scoped AND 2+ models exist,
+//         or defensively when a model scope is active without a provider scope).
+//
+// Active chip: accent_color + BOLD  Inactive: accent_dim  Label: muted
+// Key hints are embedded at the end of each row (self-documenting).
+
+fn draw_scope_bar(f: &mut Frame, app: &App, area: Rect) {
+    let show_model_row = (app.scope_provider.is_some() && app.all_models.len() >= 2)
+        || app.scope_model.is_some();
+
+    let (prov_area, model_area) = if show_model_row && area.height >= 2 {
+        let splits = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(area);
+        (splits[0], Some(splits[1]))
+    } else {
+        (area, None)
+    };
+
+    draw_provider_chip_row(f, app, prov_area);
+    if let Some(ma) = model_area {
+        draw_model_chip_row(f, app, ma);
+    }
+}
+
+/// Builds a chip row into `spans` and returns how many total chars were used.
+/// Chips are rendered in this priority order on overflow:
+///   1. Label (always)
+///   2. "All" chip (always)
+///   3. Active chip (always, if any)
+///   4. Remaining chips left-to-right
+///   5. `+N` overflow indicator
+fn scope_chip_spans(
+    label: &str,
+    options: &[String],       // all available options (without "All")
+    active: Option<&str>,      // currently selected option (None = All)
+    counts: &HashMap<String, usize>, // session count per option name
+    hint: &str,                // key hint suffix e.g. "[ ] cycle   Esc"
+    show_esc: bool,            // whether to show Esc hint
+    total_width: usize,
+    t: crate::theme::Theme,
+) -> Vec<Span<'static>> {
+    let label_style = Style::default().fg(t.muted_color());
+    let active_style = Style::default()
+        .fg(t.accent_color())
+        .add_modifier(Modifier::BOLD);
+    let inactive_style = Style::default().fg(t.accent_dim());
+    let muted = Style::default().fg(t.muted_color());
+
+    // Compute widths of fixed elements.
+    let label_w = label.chars().count();
+    let all_label = if active.is_none() { "◉ All" } else { "○ All" };
+    let all_w = all_label.chars().count();
+    // hint suffix (right side)
+    let hint_full = if show_esc {
+        format!("   {}   Esc", hint)
+    } else {
+        format!("   {}", hint)
+    };
+    let hint_w = hint_full.chars().count();
+
+    // Budget for chips after label, All, and hint.
+    let mut remaining_w = total_width
+        .saturating_sub(label_w + 2 + all_w + hint_w + 4); // 4 = "  ·  " separators
+
+    // Decide which named chips to render.
+    // Priority: active chip first, then others, truncate with +N.
+    let mut selected_chips: Vec<&str> = Vec::new();
+    let mut skipped = 0usize;
+
+    // Always include active chip if it's not "All"
+    if let Some(a) = active {
+        if let Some(full) = options.iter().find(|o| o.as_str() == a) {
+            let cnt = counts.get(full.as_str()).copied().unwrap_or(0);
+            let w = chip_display_width(full, cnt) + 4; // + "  ·  " pad
+            if remaining_w >= w {
+                selected_chips.push(full.as_str());
+                remaining_w = remaining_w.saturating_sub(w);
+            }
+        }
+    }
+
+    // Fill in the rest in order
+    for opt in options {
+        if active == Some(opt.as_str()) {
+            continue; // already added
+        }
+        let cnt = counts.get(opt.as_str()).copied().unwrap_or(0);
+        let w = chip_display_width(opt, cnt) + 4;
+        if remaining_w >= w {
+            selected_chips.push(opt.as_str());
+            remaining_w = remaining_w.saturating_sub(w);
+        } else {
+            skipped += 1;
+        }
+    }
+
+    // Build spans
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::styled(format!("  {}", label), label_style));
+
+    // All chip
+    spans.push(Span::styled("  ".to_string(), muted));
+    spans.push(Span::styled(
+        all_label.to_string(),
+        if active.is_none() { active_style } else { inactive_style },
+    ));
+
+    // Named chips (in order: active first, then as collected)
+    let mut ordered: Vec<&str> = Vec::new();
+    if let Some(a) = active {
+        if selected_chips.contains(&a) {
+            ordered.push(a);
+        }
+    }
+    for c in &selected_chips {
+        if Some(*c) != active {
+            ordered.push(c);
+        }
+    }
+
+    for name in ordered {
+        let is_active = active == Some(name);
+        let cnt = counts.get(name).copied().unwrap_or(0);
+        let display_name = truncate_with_ellipsis(name, 14);
+        let chip_str = if cnt > 0 {
+            format!(
+                "{}  {} ·{}",
+                if is_active { "  ●" } else { "  ○" },
+                display_name,
+                cnt
+            )
+        } else {
+            format!(
+                "{}  {}",
+                if is_active { "  ●" } else { "  ○" },
+                display_name
+            )
+        };
+        spans.push(Span::styled(
+            chip_str,
+            if is_active { active_style } else { inactive_style },
+        ));
+    }
+
+    if skipped > 0 {
+        spans.push(Span::styled(
+            format!("  +{}", skipped),
+            Style::default().fg(t.muted_color()),
+        ));
+    }
+
+    // Key hint
+    spans.push(Span::styled(hint_full, muted));
+
+    spans
+}
+
+fn chip_display_width(name: &str, count: usize) -> usize {
+    let n = name.chars().count().min(14);
+    if count > 0 {
+        n + count.to_string().len() + 4 // "  ○  name·NN"
+    } else {
+        n + 3 // "  ○  name"
+    }
+}
+
+fn draw_provider_chip_row(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.theme;
+    let show_esc = app.scope_provider.is_some();
+
+    // Count sessions per provider (unscoped, from full list)
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for s in &app.sessions_list {
+        if !s.provider.is_empty() {
+            *counts.entry(s.provider.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let hint = "[ ]  cycle";
+    let spans = scope_chip_spans(
+        "◈  Provider",
+        &app.all_providers,
+        app.scope_provider.as_deref(),
+        &counts,
+        hint,
+        show_esc,
+        area.width as usize,
+        t,
+    );
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_model_chip_row(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.theme;
+
+    // Count sessions per model, filtered by current provider scope
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for s in &app.sessions_list {
+        let prov_match = app
+            .scope_provider
+            .as_ref()
+            .map(|p| p == &s.provider)
+            .unwrap_or(true);
+        if prov_match {
+            *counts.entry(s.model.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let hint = "{ }  cycle";
+    let spans = scope_chip_spans(
+        "◈  Model   ",
+        &app.all_models,
+        app.scope_model.as_deref(),
+        &counts,
+        hint,
+        false,
+        area.width as usize,
+        t,
+    );
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 // ── Overview cards ────────────────────────────────────────────────────────────
@@ -302,23 +565,6 @@ fn draw_providers_card(f: &mut Frame, app: &App, area: Rect) {
             "  No data yet",
             Style::default().fg(t.muted_color()),
         )));
-    }
-
-    // Scope hint: active filter or key hint when multiple providers exist
-    if lines.len() < max_rows {
-        let scope_line = if let Some(ref p) = app.scope_provider {
-            format!("  ● {}  Esc clears", truncate_with_ellipsis(p, 10))
-        } else if app.all_providers.len() >= 2 {
-            "  [ ] filter provider".to_string()
-        } else {
-            String::new()
-        };
-        if !scope_line.is_empty() {
-            lines.push(Line::from(Span::styled(
-                scope_line,
-                Style::default().fg(t.muted_color()),
-            )));
-        }
     }
 
     f.render_widget(

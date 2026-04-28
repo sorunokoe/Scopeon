@@ -967,12 +967,21 @@ impl App {
                 self.cycle_scope_provider_prev();
                 return;
             },
-            // Model scope cycling (only on Sessions tab, when provider scoped or models exist).
-            KeyCode::Char('}') if self.tab == Tab::Sessions && !self.all_models.is_empty() => {
+            // Model scope cycling — only when a provider is already scoped,
+            // so the model row is visible in the scope bar.
+            KeyCode::Char('}')
+                if self.tab == Tab::Sessions
+                    && self.scope_provider.is_some()
+                    && !self.all_models.is_empty() =>
+            {
                 self.cycle_scope_model();
                 return;
             },
-            KeyCode::Char('{') if self.tab == Tab::Sessions && !self.all_models.is_empty() => {
+            KeyCode::Char('{')
+                if self.tab == Tab::Sessions
+                    && self.scope_provider.is_some()
+                    && !self.all_models.is_empty() =>
+            {
                 self.cycle_scope_model_prev();
                 return;
             },
@@ -1394,8 +1403,11 @@ impl App {
                 //   row N+2     = first session content row
                 let banner_h = if self.alert_banner.is_some() { 1u16 } else { 0u16 };
                 let has_data = self.budget.daily_spent > 0.0 || self.global_stats.is_some();
-                let cards_h = if has_data && self.terminal_height >= 13 { 7u16 } else { 0u16 };
-                let body_start = 1u16 + banner_h + cards_h + 1u16;
+                // Derive scope_h and cards_h using the same logic as sessions::draw().
+                let scope_h = crate::views::sessions::compute_scope_h(self);
+                let content_h = self.terminal_height.saturating_sub(2 + banner_h);
+                let cards_h = if has_data && content_h >= 14 + scope_h { 7u16 } else { 0u16 };
+                let body_start = 1u16 + banner_h + cards_h + scope_h + 1u16;
                 if row >= body_start {
                     let row_in_body = row - body_start;
                     let row_h = 2u16; // each session row renders project + cost (2 lines)
