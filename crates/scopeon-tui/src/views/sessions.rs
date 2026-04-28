@@ -15,7 +15,7 @@ use ratatui::{
     Frame,
 };
 
-use scopeon_core::{shadow_cost, Session, SessionStats};
+use scopeon_core::{context_window_for_model, shadow_cost, Session, SessionStats};
 
 use crate::app::App;
 use crate::text::{truncate_to_chars, truncate_with_ellipsis};
@@ -325,9 +325,615 @@ fn draw_model_chip_row(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+// ── Scoped provider/model dashboards ─────────────────────────────────────────
+
+/// Aggregated stats computed from `sessions_list` + `session_summaries` for a
+/// given provider and/or model filter. Used by provider and model dashboards.
+struct ScopedStats {
+    session_count: usize,
+    total_cost: f64,
+    today_cost: f64,
+    today_sessions: usize,
+    week_sessions: usize,
+    week_cost: f64,
+    prev_week_cost: f64,
+    avg_cost_per_session: f64,
+    avg_cache_rate: f64,
+    total_turns: i64,
+    avg_turns_per_session: f64,
+    top_models: Vec<(String, usize)>,
+    top_projects: Vec<(String, usize)>,
+    top_providers: Vec<(String, usize)>,
+}
+
+fn compute_scoped_stats(app: &App, provider: Option<&str>, model: Option<&str>) -> ScopedStats {
+    let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let week_ms = 7 * 24 * 3600 * 1000i64;
+    let prev_week_ms = 14 * 24 * 3600 * 1000i64;
+
+    let sessions: Vec<&Session> = app
+        .sessions_list
+        .iter()
+        .filter(|s| {
+            provider.map(|p| s.provider == p).unwrap_or(true)
+                && model.map(|m| s.model == m).unwrap_or(true)
+        })
+        .collect();
+
+    let session_count = sessions.len();
+    let mut total_cost = 0.0f64;
+    let mut today_cost = 0.0f64;
+    let mut today_sessions = 0usize;
+    let mut week_sessions = 0usize;
+    let mut week_cost = 0.0f64;
+    let mut prev_week_cost = 0.0f64;
+    let mut total_turns = 0i64;
+    let mut cache_rates: Vec<f64> = Vec::new();
+    let mut model_counts: HashMap<String, usize> = HashMap::new();
+    let mut project_counts: HashMap<String, usize> = HashMap::new();
+    let mut provider_counts: HashMap<String, usize> = HashMap::new();
+
+    for s in &sessions {
+        let cost = app
+            .session_summaries
+            .get(&s.id)
+            .map(|sm| sm.estimated_cost_usd)
+            .unwrap_or(0.0);
+        let cache = app
+            .session_summaries
+            .get(&s.id)
+            .map(|sm| sm.cache_hit_rate)
+            .unwrap_or(0.0);
+
+        total_cost += cost;
+        total_turns += s.total_turns;
+        cache_rates.push(cache);
+
+        let sess_date = chrono::DateTime::from_timestamp_millis(s.started_at)
+            .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+
+        if sess_date == today_str {
+            today_cost += cost;
+            today_sessions += 1;
+        }
+        let age_ms = now_ms - s.started_at;
+        if age_ms <= week_ms {
+            week_sessions += 1;
+            week_cost += cost;
+        } else if age_ms <= prev_week_ms {
+            prev_week_cost += cost;
+        }
+
+        if !s.model.is_empty() {
+            *model_counts.entry(s.model.clone()).or_insert(0) += 1;
+        }
+        if !s.project_name.is_empty() {
+            *project_counts.entry(s.project_name.clone()).or_insert(0) += 1;
+        }
+        if !s.provider.is_empty() {
+            *provider_counts.entry(s.provider.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let avg_cost = if session_count > 0 {
+        total_cost / session_count as f64
+    } else {
+        0.0
+    };
+    let avg_cache = if !cache_rates.is_empty() {
+        cache_rates.iter().sum::<f64>() / cache_rates.len() as f64
+    } else {
+        0.0
+    };
+    let avg_turns = if session_count > 0 {
+        total_turns as f64 / session_count as f64
+    } else {
+        0.0
+    };
+
+    let mut top_models: Vec<(String, usize)> = model_counts.into_iter().collect();
+    top_models.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut top_projects: Vec<(String, usize)> = project_counts.into_iter().collect();
+    top_projects.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut top_providers: Vec<(String, usize)> = provider_counts.into_iter().collect();
+    top_providers.sort_by(|a, b| b.1.cmp(&a.1));
+
+    ScopedStats {
+        session_count,
+        total_cost,
+        today_cost,
+        today_sessions,
+        week_sessions,
+        week_cost,
+        prev_week_cost,
+        avg_cost_per_session: avg_cost,
+        avg_cache_rate: avg_cache,
+        total_turns,
+        avg_turns_per_session: avg_turns,
+        top_models,
+        top_projects,
+        top_providers,
+    }
+}
+
+fn draw_provider_dashboard(f: &mut Frame, app: &App, area: Rect, provider: &str) {
+    let stats = compute_scoped_stats(app, Some(provider), None);
+    let t = app.theme;
+
+    let cols = if area.width >= 90 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(35),
+                Constraint::Percentage(33),
+                Constraint::Percentage(32),
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area)
+    };
+
+    // ── Column 1: Activity ──────────────────────────────────────────────────
+    {
+        let m = t.muted_color();
+        let trend_str = week_trend_str(stats.week_cost, stats.prev_week_cost);
+        let mut lines: Vec<Line<'static>> = vec![];
+
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("{}", stats.session_count),
+                Style::default()
+                    .fg(t.text_primary())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" sessions", Style::default().fg(m)),
+            Span::styled(
+                format!("   {}t total", fmt_k(stats.total_turns)),
+                Style::default().fg(m),
+            ),
+        ]));
+
+        if stats.avg_turns_per_session > 0.0 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  avg {:.0}t/session", stats.avg_turns_per_session),
+                Style::default().fg(m),
+            )]));
+        }
+
+        if stats.today_sessions > 0 || stats.today_cost > 0.0 {
+            lines.push(Line::from(vec![
+                Span::styled("  today  ", Style::default().fg(m)),
+                Span::styled(
+                    format!("{} sessions", stats.today_sessions),
+                    Style::default().fg(t.text_secondary()),
+                ),
+                if stats.today_cost > 0.0 {
+                    Span::styled(
+                        format!("  ${:.2}", stats.today_cost),
+                        Style::default().fg(t.cost_color()),
+                    )
+                } else {
+                    Span::styled("", Style::default())
+                },
+            ]));
+        }
+
+        if stats.week_sessions > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("  7d  ", Style::default().fg(m)),
+                Span::styled(
+                    format!("{} sessions", stats.week_sessions),
+                    Style::default().fg(t.text_secondary()),
+                ),
+            ]));
+        }
+
+        if !trend_str.is_empty() {
+            let trend_col = if trend_str.starts_with('↑') {
+                t.error_color()
+            } else if trend_str.starts_with('↓') {
+                t.success_color()
+            } else {
+                m
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {}", trend_str),
+                Style::default().fg(trend_col),
+            )));
+        }
+
+        let title = format!(" ◉ {} ", provider);
+        f.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(t.border_type())
+                    .border_style(t.active_border_style())
+                    .title(title),
+            ),
+            cols[0],
+        );
+    }
+
+    // ── Column 2: Cost & Cache ──────────────────────────────────────────────
+    {
+        let m = t.muted_color();
+        let cache_pct = stats.avg_cache_rate * 100.0;
+        let cache_col = t.cache_color(cache_pct);
+        let bar_w = (cols[1].width.saturating_sub(14) as usize).clamp(6, 14);
+        let cache_bar = fill_bar(stats.avg_cache_rate, bar_w);
+
+        let mut lines: Vec<Line<'static>> = vec![];
+
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("${:.3}", stats.total_cost),
+                Style::default()
+                    .fg(t.cost_color())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  total", Style::default().fg(m)),
+        ]));
+
+        if stats.avg_cost_per_session > 0.0 {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("${:.3}", stats.avg_cost_per_session),
+                    Style::default().fg(t.cost_color()),
+                ),
+                Span::styled("  avg / session", Style::default().fg(m)),
+            ]));
+        }
+
+        if stats.today_cost > 0.0 {
+            lines.push(Line::from(vec![
+                Span::styled("  today  ", Style::default().fg(m)),
+                Span::styled(
+                    format!("${:.3}", stats.today_cost),
+                    Style::default().fg(t.cost_color()),
+                ),
+            ]));
+        }
+
+        if cache_pct > 0.0 {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(cache_bar, Style::default().fg(cache_col)),
+                Span::styled(
+                    format!(" {:.0}% cache", cache_pct),
+                    Style::default().fg(cache_col).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+
+        f.render_widget(
+            Paragraph::new(lines).block(themed_block_borders(
+                t,
+                "Cost",
+                false,
+                Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+            )),
+            cols[1],
+        );
+    }
+
+    // ── Column 3: Models used (only on wide terminals) ──────────────────────
+    if cols.len() > 2 {
+        let m = t.muted_color();
+        let total_sess = stats.session_count.max(1);
+        let name_w = (cols[2].width.saturating_sub(18) as usize).clamp(6, 14);
+        let bar_w = 6usize;
+
+        let mut lines: Vec<Line<'static>> = vec![];
+        for (model_name, cnt) in stats.top_models.iter().take(3) {
+            let ratio = *cnt as f64 / total_sess as f64;
+            let filled = (ratio * bar_w as f64) as usize;
+            let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
+            let short = shorten_model(model_name);
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("{:<w$}", truncate_with_ellipsis(&short, name_w), w = name_w),
+                    Style::default().fg(t.model_color()),
+                ),
+                Span::styled(
+                    format!(" {:>3}", cnt),
+                    Style::default()
+                        .fg(t.text_primary())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("  {}", bar), Style::default().fg(m)),
+            ]));
+        }
+
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  No models yet",
+                Style::default().fg(m),
+            )));
+        }
+
+        f.render_widget(
+            Paragraph::new(lines).block(themed_block_borders(
+                t,
+                "Models",
+                false,
+                Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+            )),
+            cols[2],
+        );
+    }
+}
+
+fn draw_model_dashboard(f: &mut Frame, app: &App, area: Rect, provider: Option<&str>, model: &str) {
+    let stats = compute_scoped_stats(app, provider, Some(model));
+    let t = app.theme;
+    let ctx_window = context_window_for_model(model);
+
+    let cols = if area.width >= 90 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(35),
+                Constraint::Percentage(33),
+                Constraint::Percentage(32),
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area)
+    };
+
+    // ── Column 1: Activity ──────────────────────────────────────────────────
+    {
+        let m = t.muted_color();
+        let short_model = shorten_model(model);
+        let trend_str = week_trend_str(stats.week_cost, stats.prev_week_cost);
+
+        let mut lines: Vec<Line<'static>> = vec![];
+
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("{}", stats.session_count),
+                Style::default()
+                    .fg(t.text_primary())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" sessions", Style::default().fg(m)),
+            Span::styled(
+                format!("   {}t total", fmt_k(stats.total_turns)),
+                Style::default().fg(m),
+            ),
+        ]));
+
+        if stats.avg_turns_per_session > 0.0 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  avg {:.0}t/session", stats.avg_turns_per_session),
+                Style::default().fg(m),
+            )]));
+        }
+
+        if stats.today_sessions > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("  today  ", Style::default().fg(m)),
+                Span::styled(
+                    format!("{} sessions", stats.today_sessions),
+                    Style::default().fg(t.text_secondary()),
+                ),
+            ]));
+        }
+
+        if stats.week_sessions > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("  7d  ", Style::default().fg(m)),
+                Span::styled(
+                    format!("{} sessions", stats.week_sessions),
+                    Style::default().fg(t.text_secondary()),
+                ),
+            ]));
+        }
+
+        if !stats.top_providers.is_empty() {
+            let pvds = stats
+                .top_providers
+                .iter()
+                .take(2)
+                .map(|(p, _)| shorten_model(p))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            lines.push(Line::from(vec![
+                Span::styled("  via  ", Style::default().fg(m)),
+                Span::styled(pvds, Style::default().fg(t.text_secondary())),
+            ]));
+        }
+
+        if !trend_str.is_empty() {
+            let trend_col = if trend_str.starts_with('↑') {
+                t.error_color()
+            } else if trend_str.starts_with('↓') {
+                t.success_color()
+            } else {
+                m
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {}", trend_str),
+                Style::default().fg(trend_col),
+            )));
+        }
+
+        let title = format!(" ◉ {} ", short_model);
+        f.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(t.border_type())
+                    .border_style(t.active_border_style())
+                    .title(title),
+            ),
+            cols[0],
+        );
+    }
+
+    // ── Column 2: Cost, Cache & Context window ──────────────────────────────
+    {
+        let m = t.muted_color();
+        let cache_pct = stats.avg_cache_rate * 100.0;
+        let cache_col = t.cache_color(cache_pct);
+        let bar_w = (cols[1].width.saturating_sub(14) as usize).clamp(6, 14);
+        let cache_bar = fill_bar(stats.avg_cache_rate, bar_w);
+
+        let ctx_str = if ctx_window >= 1_000_000 {
+            format!("{:.0}M ctx", ctx_window as f64 / 1_000_000.0)
+        } else {
+            format!("{}k ctx", ctx_window / 1000)
+        };
+
+        let mut lines: Vec<Line<'static>> = vec![];
+
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("${:.3}", stats.total_cost),
+                Style::default()
+                    .fg(t.cost_color())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  total", Style::default().fg(m)),
+        ]));
+
+        if stats.avg_cost_per_session > 0.0 {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("${:.3}", stats.avg_cost_per_session),
+                    Style::default().fg(t.cost_color()),
+                ),
+                Span::styled("  avg / session", Style::default().fg(m)),
+            ]));
+        }
+
+        if cache_pct > 0.0 {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(cache_bar, Style::default().fg(cache_col)),
+                Span::styled(
+                    format!(" {:.0}% cache", cache_pct),
+                    Style::default().fg(cache_col).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+
+        if ctx_window > 0 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  {}", ctx_str),
+                Style::default().fg(m),
+            )]));
+        }
+
+        f.render_widget(
+            Paragraph::new(lines).block(themed_block_borders(
+                t,
+                "Cost",
+                false,
+                Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+            )),
+            cols[1],
+        );
+    }
+
+    // ── Column 3: Top projects (only on wide terminals) ─────────────────────
+    if cols.len() > 2 {
+        let m = t.muted_color();
+        let total_sess = stats.session_count.max(1);
+        let name_w = (cols[2].width.saturating_sub(16) as usize).clamp(6, 16);
+        let bar_w = 6usize;
+
+        let mut lines: Vec<Line<'static>> = vec![];
+        for (proj, cnt) in stats.top_projects.iter().take(3) {
+            let ratio = *cnt as f64 / total_sess as f64;
+            let filled = (ratio * bar_w as f64) as usize;
+            let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("{:<w$}", truncate_with_ellipsis(proj, name_w), w = name_w),
+                    Style::default().fg(t.text_primary()),
+                ),
+                Span::styled(
+                    format!(" {:>3}", cnt),
+                    Style::default()
+                        .fg(t.text_secondary())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("  {}", bar), Style::default().fg(m)),
+            ]));
+        }
+
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  No projects yet",
+                Style::default().fg(m),
+            )));
+        }
+
+        f.render_widget(
+            Paragraph::new(lines).block(themed_block_borders(
+                t,
+                "Projects",
+                false,
+                Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+            )),
+            cols[2],
+        );
+    }
+}
+
+/// Cost trend string comparing this week vs previous week.
+fn week_trend_str(this_week: f64, prev_week: f64) -> String {
+    if prev_week > 0.01 {
+        let pct = (this_week - prev_week) / prev_week * 100.0;
+        if pct > 10.0 {
+            format!("↑ +{:.0}% vs prev week", pct)
+        } else if pct < -10.0 {
+            format!("↓ {:.0}% vs prev week", pct.abs())
+        } else {
+            "≈ stable spend".to_string()
+        }
+    } else if this_week > 0.0 {
+        "● new this week".to_string()
+    } else {
+        String::new()
+    }
+}
+
 // ── Overview cards ────────────────────────────────────────────────────────────
 
 fn draw_overview_cards(f: &mut Frame, app: &App, area: Rect) {
+    // Progressive disclosure: when a scope is active, replace global cards with
+    // a scoped dashboard showing stats specific to the selected provider/model.
+    match (&app.scope_provider, &app.scope_model) {
+        (Some(p), Some(m)) => {
+            draw_model_dashboard(f, app, area, Some(p.as_str()), m.as_str());
+        },
+        (Some(p), None) => {
+            draw_provider_dashboard(f, app, area, p.as_str());
+        },
+        _ => draw_global_cards(f, app, area),
+    }
+}
+
+fn draw_global_cards(f: &mut Frame, app: &App, area: Rect) {
     if area.width < 90 {
         // Narrow: two cards side-by-side
         let h = Layout::default()
