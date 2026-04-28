@@ -1689,6 +1689,11 @@ fn draw_preview_header(
     let cache_bar = fill_bar(stats.cache_hit_rate, 14);
     let cache_col = app.theme.cache_color(cache_pct);
 
+    // True when the provider doesn't export per-turn token breakdowns (e.g. copilot-cli).
+    let no_token_data = stats.total_input_tokens == 0
+        && stats.total_cache_read_tokens == 0
+        && stats.total_cache_write_tokens == 0;
+
     let title = if !branch.is_empty() && branch != "—" {
         format!(" {} ⎇ {} ", project, branch)
     } else {
@@ -1730,29 +1735,37 @@ fn draw_preview_header(
         Span::styled(format!("   {}", time_str), Style::default().fg(m)),
     ];
 
-    let line2 = vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(cache_bar, Style::default().fg(cache_col)),
-        Span::styled(
-            format!(" {:.0}%", cache_pct),
-            Style::default().fg(cache_col).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  saved ", Style::default().fg(m)),
-        Span::styled(
-            format!("${:.4}", stats.cache_savings_usd),
-            Style::default().fg(app.theme.success_color()),
-        ),
-        Span::styled("  MCP ", Style::default().fg(m)),
-        Span::styled(
-            stats.total_mcp_calls.to_string(),
-            Style::default().fg(app.theme.warning_color()),
-        ),
-    ];
+    let line2 = if no_token_data {
+        vec![
+            Span::styled("  ", Style::default()),
+            Span::styled("cache —", Style::default().fg(m)),
+            Span::styled("  token data not available for this provider", Style::default().fg(m)),
+        ]
+    } else {
+        vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(cache_bar, Style::default().fg(cache_col)),
+            Span::styled(
+                format!(" {:.0}%", cache_pct),
+                Style::default().fg(cache_col).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  saved ", Style::default().fg(m)),
+            Span::styled(
+                format!("${:.4}", stats.cache_savings_usd),
+                Style::default().fg(app.theme.success_color()),
+            ),
+            Span::styled("  MCP ", Style::default().fg(m)),
+            Span::styled(
+                stats.total_mcp_calls.to_string(),
+                Style::default().fg(app.theme.warning_color()),
+            ),
+        ]
+    };
 
     let line3 = vec![
         Span::styled("  ", Style::default()),
         Span::styled(
-            fmt_k(stats.total_input_tokens),
+            if no_token_data { "—".to_string() } else { fmt_k(stats.total_input_tokens) },
             Style::default().fg(app.theme.accent_dim()),
         ),
         Span::styled(" in  ", Style::default().fg(m)),
@@ -2428,6 +2441,11 @@ fn draw_detail_header(
     let cache_bar = fill_bar(stats.cache_hit_rate, 14);
     let cache_col = app.theme.cache_color(cache_pct);
 
+    // True when the provider doesn't export per-turn token breakdowns (e.g. copilot-cli).
+    let no_token_data = stats.total_input_tokens == 0
+        && stats.total_cache_read_tokens == 0
+        && stats.total_cache_write_tokens == 0;
+
     let shadow_haiku = shadow_cost(
         model,
         "claude-haiku-4",
@@ -2479,29 +2497,40 @@ fn draw_detail_header(
     }
 
     // Line 2: cache bar + % + saved + MCP
-    let line2 = vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(cache_bar, Style::default().fg(cache_col)),
-        Span::styled(
-            format!(" {:.0}%", cache_pct),
-            Style::default().fg(cache_col).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  saved ", Style::default().fg(m)),
-        Span::styled(
-            format!("${:.4}", stats.cache_savings_usd),
-            Style::default().fg(app.theme.success_color()),
-        ),
-        Span::styled("  MCP ", Style::default().fg(m)),
-        Span::styled(
-            stats.total_mcp_calls.to_string(),
-            Style::default().fg(app.theme.warning_color()),
-        ),
-    ];
+    let line2 = if no_token_data {
+        vec![
+            Span::styled("  ", Style::default()),
+            Span::styled("cache —", Style::default().fg(m)),
+            Span::styled("  token data not available for this provider", Style::default().fg(m)),
+        ]
+    } else {
+        vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(cache_bar, Style::default().fg(cache_col)),
+            Span::styled(
+                format!(" {:.0}%", cache_pct),
+                Style::default().fg(cache_col).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  saved ", Style::default().fg(m)),
+            Span::styled(
+                format!("${:.4}", stats.cache_savings_usd),
+                Style::default().fg(app.theme.success_color()),
+            ),
+            Span::styled("  MCP ", Style::default().fg(m)),
+            Span::styled(
+                stats.total_mcp_calls.to_string(),
+                Style::default().fg(app.theme.warning_color()),
+            ),
+        ]
+    };
 
     // Line 3: tokens (input / output / think)
     let line3 = vec![
         Span::styled("  ", Style::default()),
-        Span::styled(fmt_k(stats.total_input_tokens), Style::default().fg(app.theme.accent_dim())),
+        Span::styled(
+            if no_token_data { "—".to_string() } else { fmt_k(stats.total_input_tokens) },
+            Style::default().fg(app.theme.accent_dim()),
+        ),
         Span::styled(" in  ", Style::default().fg(m)),
         Span::styled(fmt_k(stats.total_output_tokens), Style::default().fg(app.theme.accent_color())),
         Span::styled(" out", Style::default().fg(m)),
