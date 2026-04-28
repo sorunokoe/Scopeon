@@ -1,10 +1,11 @@
-//! Tab 1: Sessions — live banner + interactive master/detail session browser.
+//! Tab 1: Sessions — dashboard overview + full-width interactive session list.
 //!
-//! Top: compact live session banner when a session is active.
-//! Left panel: scrollable session list (newest first), selectable with ↑↓.
-//! Right panel: selected session detail (key stats + turn table).
-//! Enter: full-screen session detail mode.
-//! /: filter sessions. s: cycle sort order.
+//! Top: 3-card overview strip (Today / Efficiency / Providers) — hides on tiny terminals.
+//! Below: scrollable session list (newest first), selectable with ↑↓.
+//! Enter: full-screen session detail (turns table + compact header).
+//! /: filter sessions. s: cycle sort order. []: provider scope. {}: model scope.
+
+use std::collections::HashMap;
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -16,9 +17,9 @@ use ratatui::{
 
 use scopeon_core::{shadow_cost, Session, SessionStats};
 
-use crate::app::{App, PaneFocus};
+use crate::app::App;
 use crate::text::{truncate_to_chars, truncate_with_ellipsis};
-use crate::views::components::{empty_state_lines, themed_block};
+use crate::views::components::{empty_state_lines, themed_block, themed_block_borders};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // Full-screen detail mode (Enter key)
@@ -29,7 +30,8 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     let sessions = app.filtered_sessions();
 
-    if sessions.is_empty() && !app.sessions_filter_active {
+    // True empty: no sessions at all (first run)
+    if app.sessions_list.is_empty() {
         let lines = empty_state_lines(
             app.theme,
             "⬡",
@@ -43,131 +45,296 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Chip rows: provider row when ≥2 providers, model row when provider scoped and ≥2 models.
-    let show_provider_chips = app.all_providers.len() >= 2;
-    let show_model_chips = app.scope_provider.is_some() && app.all_models.len() >= 2;
-    let chip_rows = (show_provider_chips as u16) + (show_model_chips as u16);
+    // Overview cards (7 rows: 5 content + 2 borders).
+    // Shown when there's meaningful data and enough terminal height for a usable list below.
+    let has_data = app.budget.daily_spent > 0.0 || app.global_stats.is_some();
+    let cards_h = if has_data && area.height >= 14 { 7u16 } else { 0u16 };
 
-    let main_area = if chip_rows > 0 && area.height > chip_rows + 4 {
-        let v = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(chip_rows), Constraint::Min(0)])
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(cards_h), Constraint::Min(0)])
+        .split(area);
+
+    if cards_h > 0 {
+        draw_overview_cards(f, app, chunks[0]);
+    }
+
+    draw_session_list(f, app, &sessions, chunks[1]);
+}
+
+// ── Overview cards ────────────────────────────────────────────────────────────
+
+fn draw_overview_cards(f: &mut Frame, app: &App, area: Rect) {
+    if area.width < 90 {
+        // Narrow: two cards side-by-side
+        let h = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
-        draw_filter_chips(f, app, v[0], show_provider_chips, show_model_chips);
-        v[1]
+        draw_today_card(f, app, h[0]);
+        draw_efficiency_card(f, app, h[1]);
     } else {
-        area
-    };
-
-    // C-05: Proportional list width — 38% on wide terminals, fixed 44 on narrow.
-    let list_w = if main_area.width >= 100 {
-        (main_area.width as f32 * 0.38) as u16
-    } else {
-        44u16
-    };
-
-    let h = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(list_w), Constraint::Min(0)])
-        .split(main_area);
-
-    draw_session_list(f, app, &sessions, h[0]);
-    draw_session_detail(f, app, h[1]);
+        // Wide: three equal cards
+        let h = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(35),
+                Constraint::Percentage(33),
+                Constraint::Percentage(32),
+            ])
+            .split(area);
+        draw_today_card(f, app, h[0]);
+        draw_efficiency_card(f, app, h[1]);
+        draw_providers_card(f, app, h[2]);
+    }
 }
 
-// ── Provider / model chip navigation row ─────────────────────────────────────
-
-/// Renders 1–2 chip rows showing provider and model scope selection.
-/// Keys `[`/`]` cycle providers; `{`/`}` cycle models.
-fn draw_filter_chips(
-    f: &mut Frame,
-    app: &App,
-    area: Rect,
-    show_providers: bool,
-    show_models: bool,
-) {
+fn draw_today_card(f: &mut Frame, app: &App, area: Rect) {
     let t = app.theme;
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    if show_providers {
-        lines.push(build_chip_row(
-            "Provider",
-            &app.all_providers,
-            &app.scope_provider,
-            t,
-            "  ]  next   [  prev",
-            app.scope_provider.is_some() || app.scope_model.is_some(),
-        ));
-    }
-    if show_models {
-        lines.push(build_chip_row(
-            "Model   ",
-            &app.all_models,
-            &app.scope_model,
-            t,
-            "  }  next   {  prev",
-            false,
-        ));
+    let today_row = app.global_stats.as_ref().and_then(|g| {
+        g.daily.iter().find(|r| r.date == today_str)
+    });
+
+    let today_turns = today_row.map(|r| r.turn_count).unwrap_or(0);
+    let today_sessions = today_row.map(|r| r.session_count).unwrap_or(0);
+    let spent = app.budget.daily_spent;
+    let limit = app.budget.daily_limit;
+
+    let (live_icon, live_color) = if app.is_live {
+        ("◉", t.success_color())
+    } else if app.copilot_active {
+        ("◉", t.warning_color())
+    } else {
+        ("◎", t.muted_color())
+    };
+
+    let trend_glyph = if app.trend_cost_pct > 2.0 {
+        " ↑"
+    } else if app.trend_cost_pct < -2.0 {
+        " ↓"
+    } else {
+        " ≈"
+    };
+
+    let mut lines: Vec<Line<'static>> = vec![];
+
+    // Line 1: live indicator · today cost · trend · turns · sessions
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {} ", live_icon), Style::default().fg(live_color)),
+        Span::styled(
+            format!("${:.2}{}", spent, trend_glyph),
+            Style::default().fg(t.cost_color()).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("   {}t  {}s", today_turns, today_sessions),
+            Style::default().fg(t.text_secondary()),
+        ),
+    ]));
+
+    // Line 2: budget bar (only when limit configured)
+    if limit > 0.0 {
+        let runway_pct = (spent / limit * 100.0).min(100.0);
+        let bar_w = (area.width.saturating_sub(14) as usize).clamp(6, 14);
+        let filled = (runway_pct / 100.0 * bar_w as f64) as usize;
+        let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
+        let bar_color = if runway_pct >= 90.0 {
+            t.error_color()
+        } else if runway_pct >= 70.0 {
+            t.warning_color()
+        } else {
+            t.success_color()
+        };
+        let remaining = (limit - spent).max(0.0);
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(bar, Style::default().fg(bar_color)),
+            Span::styled(
+                format!(" ${:.2} left", remaining),
+                Style::default().fg(bar_color),
+            ),
+        ]));
     }
 
-    f.render_widget(Paragraph::new(lines), area);
+    // Line 3: EOD projection (only when meaningfully different from current spend)
+    let projected = app.budget.daily_projected_eod;
+    if projected > spent + 0.01 && projected < spent * 5.0 {
+        lines.push(Line::from(vec![Span::styled(
+            format!("  → ${:.2} by EOD", projected),
+            Style::default().fg(t.muted_color()),
+        )]));
+    }
+
+    f.render_widget(
+        Paragraph::new(lines).block(themed_block(t, "Today", false)),
+        area,
+    );
 }
 
-fn build_chip_row(
-    label: &'static str,
-    options: &[String],
-    current: &Option<String>,
-    t: crate::theme::Theme,
-    nav_hint: &'static str,
-    show_esc: bool,
-) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = vec![
-        Span::styled(format!("  ◈ {} ", label), Style::default().fg(t.muted_color())),
-    ];
+fn draw_efficiency_card(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.theme;
 
-    // "All" chip
-    if current.is_none() {
-        spans.push(Span::styled(
-            "● All".to_string(),
-            Style::default().fg(t.heading_color()).add_modifier(Modifier::BOLD),
-        ));
+    // Prefer live-session cache rate (freshest); fall back to all-time from global stats.
+    let (cache_rate, scope_label) = if let Some(ls) = &app.live_stats {
+        (ls.cache_hit_rate, "live")
+    } else if let Some(gs) = &app.global_stats {
+        (gs.cache_hit_rate, "all-time")
     } else {
-        spans.push(Span::styled("○ All".to_string(), Style::default().fg(t.muted_color())));
+        (0.0, "")
+    };
+
+    let cache_pct = cache_rate * 100.0;
+    let cache_col = t.cache_color(cache_pct);
+    let cache_savings = app.live_stats.as_ref().map(|ls| ls.cache_savings_usd)
+        .or_else(|| app.global_stats.as_ref().map(|gs| gs.cache_savings_usd))
+        .unwrap_or(0.0);
+
+    let bar_w = (area.width.saturating_sub(12) as usize).clamp(8, 16);
+    let cache_bar = fill_bar(cache_rate, bar_w);
+
+    let health = app.health_score;
+    let hc = t.health_color(health);
+
+    let mut lines: Vec<Line<'static>> = vec![];
+
+    // Line 1: cache bar + % + scope
+    lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(cache_bar, Style::default().fg(cache_col)),
+        Span::styled(
+            format!(" {:.0}%", cache_pct),
+            Style::default().fg(cache_col).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            if !scope_label.is_empty() { format!("  {}", scope_label) } else { String::new() },
+            Style::default().fg(t.muted_color()),
+        ),
+    ]));
+
+    // Line 2: savings
+    if cache_savings > 0.001 {
+        lines.push(Line::from(vec![Span::styled(
+            format!("  saved ${:.3}", cache_savings),
+            Style::default().fg(t.success_color()),
+        )]));
     }
 
-    // Option chips
-    for opt in options {
-        spans.push(Span::styled("  ".to_string(), Style::default()));
-        let is_sel = current.as_deref() == Some(opt.as_str());
-        let display = shorten_model(opt);
-        if is_sel {
+    // Line 3: health score + top suggestion
+    if health > 0.0 {
+        let max_sugg_w = area.width.saturating_sub(12) as usize;
+        let mut spans = vec![
+            Span::styled("  ⬡ ", Style::default().fg(t.muted_color())),
+            Span::styled(
+                format!("{:.0}", health),
+                Style::default().fg(hc).add_modifier(Modifier::BOLD),
+            ),
+        ];
+        if let Some(s) = app.suggestions.first() {
+            spans.push(Span::styled("  ⚡ ", Style::default().fg(t.warning_color())));
             spans.push(Span::styled(
-                format!("● {}", display),
-                Style::default().fg(t.accent_color()).add_modifier(Modifier::BOLD),
+                truncate_with_ellipsis(s.title, max_sugg_w.max(10)),
+                Style::default().fg(t.text_secondary()),
             ));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Line 4: cache bust warning (when live session degrades)
+    if let Some(drop_pct) = app.budget.cache_bust_drop {
+        lines.push(Line::from(vec![Span::styled(
+            format!("  ⚠ cache drop {:.0}%", drop_pct),
+            Style::default().fg(t.warning_color()),
+        )]));
+    }
+
+    let title = if area.width < 30 { "Cache" } else { "Efficiency" };
+    f.render_widget(
+        Paragraph::new(lines).block(themed_block_borders(
+            t,
+            title,
+            false,
+            Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+        )),
+        area,
+    );
+}
+
+fn draw_providers_card(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.theme;
+    let data = &app.budget.cost_by_provider_model;
+
+    // Aggregate all-time cost by provider
+    let mut provider_costs: HashMap<String, f64> = HashMap::new();
+    for (prov, _, cost) in data {
+        *provider_costs.entry(prov.clone()).or_insert(0.0) += cost;
+    }
+    let mut providers: Vec<(String, f64)> = provider_costs.into_iter().collect();
+    providers.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let grand_total: f64 = providers.iter().map(|(_, c)| c).sum();
+    let max_rows = area.height.saturating_sub(2) as usize;
+    let bar_w = 6usize;
+    let name_w = (area.width.saturating_sub(18) as usize).clamp(6, 14);
+
+    let mut lines: Vec<Line<'static>> = vec![];
+
+    for (prov, cost) in providers.iter().take(3) {
+        if lines.len() >= max_rows.saturating_sub(1) {
+            break;
+        }
+        let pct = if grand_total > 0.0 { cost / grand_total * 100.0 } else { 0.0 };
+        let filled = (pct / 100.0 * bar_w as f64) as usize;
+        let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("{:<w$}", truncate_with_ellipsis(prov, name_w), w = name_w),
+                Style::default().fg(t.text_primary()).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" ${:.2}", cost), Style::default().fg(t.cost_color())),
+            Span::styled(format!("  {}", bar), Style::default().fg(t.accent_dim())),
+        ]));
+    }
+
+    if providers.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No data yet",
+            Style::default().fg(t.muted_color()),
+        )));
+    }
+
+    // Scope hint: active filter or key hint when multiple providers exist
+    if lines.len() < max_rows {
+        let scope_line = if let Some(ref p) = app.scope_provider {
+            format!("  ● {}  Esc clears", truncate_with_ellipsis(p, 10))
+        } else if app.all_providers.len() >= 2 {
+            "  [ ] filter provider".to_string()
         } else {
-            spans.push(Span::styled(
-                format!("○ {}", display),
+            String::new()
+        };
+        if !scope_line.is_empty() {
+            lines.push(Line::from(Span::styled(
+                scope_line,
                 Style::default().fg(t.muted_color()),
-            ));
+            )));
         }
     }
 
-    // Navigation hint
-    spans.push(Span::styled(nav_hint.to_string(), Style::default().fg(t.muted_color())));
-    if show_esc {
-        spans.push(Span::styled("   Esc all".to_string(), Style::default().fg(t.muted_color())));
-    }
-
-    Line::from(spans)
+    f.render_widget(
+        Paragraph::new(lines).block(themed_block_borders(
+            t,
+            "Providers",
+            false,
+            Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+        )),
+        area,
+    );
 }
 
-// ── Left panel: session list ──────────────────────────────────────────────────
-//
-// C-05: 2-line rich rows (project + time + model / cost + turns + cache bar).
+// ── Session list ──────────────────────────────────────────────────────────────
 
 fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect) {
-    let is_focused = app.pane_focus == PaneFocus::Left;
     let selected = app.selected_session_idx;
 
     // Reserve one line for predicate hint chips when filter is active and empty.
@@ -195,14 +362,12 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
 
     for (sess_idx, s) in sessions.iter().enumerate() {
         let is_sel = sess_idx == selected;
-        let sel_style = if is_sel && is_focused {
+        let sel_style = if is_sel {
             Style::default().add_modifier(Modifier::REVERSED)
-        } else if is_sel {
-            Style::default().fg(app.theme.accent_color()).add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
-        let muted_style = if is_sel && is_focused {
+        let muted_style = if is_sel {
             sel_style
         } else {
             Style::default().fg(app.theme.muted_color())
@@ -223,7 +388,7 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
         };
         let bar_w = 8usize;
         let cache_bar = fill_bar(cache_pct / 100.0, bar_w);
-        let cache_color = if is_sel && is_focused {
+        let cache_color = if is_sel {
             app.theme.accent_color()
         } else {
             app.theme.cache_color(cache_pct)
@@ -253,9 +418,7 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
         let line1 = Line::from(vec![
             Span::styled(
                 format!(" {} ", sel_dot),
-                Style::default().fg(if is_sel && !is_focused {
-                    app.theme.accent_color()
-                } else if app.is_live {
+                Style::default().fg(if app.is_live {
                     app.theme.success_color()
                 } else {
                     app.theme.muted_color()
@@ -300,7 +463,7 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
         ]);
 
         // When selected, apply reversed style across the entry lines.
-        let (final_l1, final_l2) = if is_sel && is_focused {
+        let (final_l1, final_l2) = if is_sel {
             // Render as a styled background rectangle by wrapping in a single full-width span.
             let w = inner_w;
             fn pad_line(l: Line<'static>, w: usize) -> Line<'static> {
@@ -375,21 +538,21 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
         format!("({}) ", sessions.len())
     };
 
-    let border_style = if is_focused {
-        app.theme.active_border_style()
-    } else {
-        app.theme.inactive_border_style()
+    let scope_suffix = match (&app.scope_provider, &app.scope_model) {
+        (Some(p), Some(m)) => format!("  ● {} › {}", p, m),
+        (Some(p), None) => format!("  ● {}", p),
+        _ => String::new(),
     };
 
     let title = format!(
-        " Sessions {}{} [{}] ",
-        count_str, filter_suffix, sort_label
+        " Sessions {}{}{} [{}] ",
+        count_str, filter_suffix, scope_suffix, sort_label
     );
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(app.theme.border_type())
-        .border_style(border_style)
+        .border_style(app.theme.active_border_style())
         .title(title);
 
     f.render_widget(
@@ -417,48 +580,7 @@ fn draw_session_list(f: &mut Frame, app: &App, sessions: &[&Session], area: Rect
     }
 }
 
-// ── Right panel: selected session detail ──────────────────────────────────────
-
-fn draw_session_detail(f: &mut Frame, app: &App, area: Rect) {
-    let is_focused = app.pane_focus == PaneFocus::Right;
-    let border_style = if is_focused {
-        app.theme.active_border_style()
-    } else {
-        app.theme.inactive_border_style()
-    };
-
-    let Some(stats) = &app.selected_session_stats else {
-        // No session selected or stats not loaded yet
-        if app.sessions_list.is_empty() {
-            let p = Paragraph::new("  Select a session with ↑↓").block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(app.theme.border_type())
-                    .border_style(border_style)
-                    .title(" Session Detail "),
-            );
-            f.render_widget(p, area);
-        } else {
-            let p = Paragraph::new("  Loading…").block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(app.theme.border_type())
-                    .border_style(border_style)
-                    .title(" Session Detail "),
-            );
-            f.render_widget(p, area);
-        }
-        return;
-    };
-
-    let v = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Min(0)])
-        .split(area);
-
-    draw_detail_header(f, app, stats, border_style, v[0]);
-    draw_detail_turns(f, app, stats, border_style, v[1]);
-}
+// ── Full-screen detail mode (Enter key) ──────────────────────────────────────
 
 fn draw_detail_header(
     f: &mut Frame,
@@ -596,7 +718,7 @@ fn draw_detail_header(
 
     // Line 5: nav hint
     let hint_line = Line::from(vec![Span::styled(
-        "  ↑↓ scroll turns  ·  Enter fullscreen  ·  Tab switch pane",
+        "  ↑↓ scroll turns  ·  Enter fullscreen  ·  Tab switch tab",
         Style::default().fg(m),
     )]);
 
@@ -622,75 +744,6 @@ fn draw_detail_header(
     );
 }
 
-fn draw_detail_turns(
-    f: &mut Frame,
-    app: &App,
-    stats: &SessionStats,
-    border_style: Style,
-    area: Rect,
-) {
-    let scroll = app.turn_scroll_detail;
-    let hdr_style = Style::default()
-        .fg(app.theme.warning_color())
-        .add_modifier(Modifier::BOLD);
-    let header = Row::new(vec![
-        Cell::from("#").style(hdr_style),
-        Cell::from("Input").style(hdr_style),
-        Cell::from("Cache↓").style(hdr_style),
-        Cell::from("Think").style(hdr_style),
-        Cell::from("Output").style(hdr_style),
-        Cell::from("MCP").style(hdr_style),
-        Cell::from("Cost").style(hdr_style),
-    ]);
-
-    let rows: Vec<Row> = stats
-        .turns
-        .iter()
-        .rev()
-        .skip(scroll)
-        .map(|t| {
-            Row::new(vec![
-                Cell::from(t.turn_index.to_string())
-                    .style(Style::default().fg(app.theme.muted_color())),
-                Cell::from(fmt_k(t.input_tokens)).style(Style::default().fg(app.theme.accent_dim())),
-                Cell::from(fmt_k(t.cache_read_tokens))
-                    .style(Style::default().fg(app.theme.success_color())),
-                Cell::from(fmt_k(t.thinking_tokens))
-                    .style(Style::default().fg(app.theme.cost_color())),
-                Cell::from(fmt_k(t.output_tokens))
-                    .style(Style::default().fg(app.theme.accent_color())),
-                Cell::from(t.mcp_call_count.to_string())
-                    .style(Style::default().fg(app.theme.warning_color())),
-                Cell::from(format!("${:.4}", t.estimated_cost_usd))
-                    .style(Style::default().fg(app.theme.cost_color())),
-            ])
-        })
-        .collect();
-
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(4),
-            Constraint::Length(7),
-            Constraint::Length(8),
-            Constraint::Length(7),
-            Constraint::Length(7),
-            Constraint::Length(4),
-            Constraint::Length(9),
-        ],
-    )
-    .header(header)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(app.theme.border_type())
-            .border_style(border_style)
-            .title(" Turns (newest first)  ↑↓ scroll "),
-    );
-
-    f.render_widget(table, area);
-}
-
 // ── Full-screen detail mode (Enter key) ──────────────────────────────────────
 
 fn draw_session_detail_fullscreen(f: &mut Frame, app: &App, area: Rect) {
@@ -706,9 +759,9 @@ fn draw_session_detail_fullscreen(f: &mut Frame, app: &App, area: Rect) {
 
     // IS-2: When replay mode is active, show a 3-row snapshot panel above the turn table.
     let (header_h, replay_h) = if app.replay_turn_idx.is_some() {
-        (11, 3)
+        (7, 3)
     } else {
-        (11, 0)
+        (7, 0)
     };
 
     let v = Layout::default()

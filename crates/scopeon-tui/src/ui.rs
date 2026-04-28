@@ -838,7 +838,7 @@ fn build_hints(app: &App) -> String {
         },
         Tab::Sessions => {
             if app.all_providers.len() >= 2 {
-                " ↑↓:select  Enter:detail  /:filter  s:sort  [ ]:provider  { }:model  Esc:reset  ?:help  q:quit".to_string()
+                " ↑↓:select  Enter:open  /:filter  s:sort  [ ]:provider  { }:model  Tab:tabs  ?:help  q:quit".to_string()
             } else {
                 " ↑↓:select  Enter:detail  /:filter  s:sort  g/G:top/btm  ?:help  q:quit".to_string()
             }

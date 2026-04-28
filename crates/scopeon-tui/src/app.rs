@@ -239,6 +239,9 @@ pub struct App {
 
     // IS-5: Mouse state — last-clicked session list row, for single/double-click detection.
     pub mouse_last_click_row: Option<u16>,
+    /// Last known terminal height — updated each render tick so mouse hit-testing
+    /// can compute the correct session-list body row offset.
+    pub terminal_height: u16,
 
     // C-17: Provider/model scope — filters the Sessions tab list.
     // `scope_provider` is None for "All". `scope_model` is None for "All models".
@@ -326,6 +329,7 @@ impl App {
             narrative_idx: 0,
             replay_turn_idx: None,
             mouse_last_click_row: None,
+            terminal_height: 24,
             scope_provider: None,
             scope_model: None,
             all_providers: Vec::new(),
@@ -987,20 +991,10 @@ impl App {
                 // 3 is no longer a tab — ignore
                 return;
             },
-            // Tab key: cycle pane focus on split-pane tabs, else switch tabs
+            // Tab key: cycle to next tab
             KeyCode::Tab => {
-                match self.tab {
-                    Tab::Sessions => {
-                        self.pane_focus = match self.pane_focus {
-                            PaneFocus::Left => PaneFocus::Right,
-                            PaneFocus::Right => PaneFocus::Left,
-                        };
-                    },
-                    _ => {
-                        let next = (self.tab.index() + 1) % Tab::count();
-                        self.tab = Tab::from_index(next);
-                    },
-                }
+                let next = (self.tab.index() + 1) % Tab::count();
+                self.tab = Tab::from_index(next);
                 return;
             },
             KeyCode::BackTab => {
@@ -1019,49 +1013,30 @@ impl App {
         match self.tab {
             Tab::Sessions => {
                 match key {
-                    // Left pane: session selection
-                    _ if self.pane_focus == PaneFocus::Left => match key {
-                        KeyCode::Down | KeyCode::Char('j') => self.select_session_delta(1),
-                        KeyCode::Up | KeyCode::Char('k') => self.select_session_delta(-1),
-                        KeyCode::Char('g') => self.select_session_abs(0),
-                        KeyCode::Char('G') => self.select_session_abs(usize::MAX),
-                        KeyCode::Enter if !self.sessions_list.is_empty() => {
-                            self.session_detail_mode = true;
-                            self.turn_scroll_detail = 0;
-                        },
-                        KeyCode::Char('/') => {
-                            self.sessions_filter_active = true;
-                        },
-                        KeyCode::Char('s') => {
-                            self.sessions_sort = self.sessions_sort.cycle();
-                            self.selected_session_idx = 0;
-                            self.selected_session_stats = None;
-                        },
-                        KeyCode::Right | KeyCode::Char('l') => {
-                            self.pane_focus = PaneFocus::Right;
-                        },
-                        // Reset scope when Esc is pressed and a scope is active.
-                        KeyCode::Esc
-                            if self.scope_provider.is_some() || self.scope_model.is_some() =>
-                        {
-                            self.scope_provider = None;
-                            self.scope_model = None;
-                        },
-                        _ => {},
+                    KeyCode::Down | KeyCode::Char('j') => self.select_session_delta(1),
+                    KeyCode::Up | KeyCode::Char('k') => self.select_session_delta(-1),
+                    KeyCode::Char('g') => self.select_session_abs(0),
+                    KeyCode::Char('G') => self.select_session_abs(usize::MAX),
+                    KeyCode::Enter if !self.sessions_list.is_empty() => {
+                        self.session_detail_mode = true;
+                        self.turn_scroll_detail = 0;
                     },
-                    // Right pane: scroll through turns
-                    _ => match key {
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            self.turn_scroll_detail = self.turn_scroll_detail.saturating_add(1)
-                        },
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            self.turn_scroll_detail = self.turn_scroll_detail.saturating_sub(1)
-                        },
-                        KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
-                            self.pane_focus = PaneFocus::Left;
-                        },
-                        _ => {},
+                    KeyCode::Char('/') => {
+                        self.sessions_filter_active = true;
                     },
+                    KeyCode::Char('s') => {
+                        self.sessions_sort = self.sessions_sort.cycle();
+                        self.selected_session_idx = 0;
+                        self.selected_session_stats = None;
+                    },
+                    // Reset scope when Esc is pressed and a scope is active.
+                    KeyCode::Esc
+                        if self.scope_provider.is_some() || self.scope_model.is_some() =>
+                    {
+                        self.scope_provider = None;
+                        self.scope_model = None;
+                    },
+                    _ => {},
                 }
             },
             Tab::Spend => match key {
@@ -1409,19 +1384,26 @@ impl App {
             // IS-5: Session list row click — select session; second click on same row = open detail.
             MouseEventKind::Down(MouseButton::Left)
                 if self.tab == Tab::Sessions
-                    && !self.session_detail_mode
-                    && self.pane_focus == PaneFocus::Left =>
+                    && !self.session_detail_mode =>
             {
-                // The session list body starts at row 2 (tab bar row=0, border row=1, header row=2).
-                // Each row is 2 lines tall. Compute the logical index within the visible window.
-                let body_start = 3u16; // tab bar + outer border + header row
+                // Compute where the session list body starts:
+                //   row 0       = tab bar
+                //   row 1       = alert banner (0 or 1 line)
+                //   rows 2..N   = overview cards (7 lines when data exists and terminal is tall)
+                //   row N+1     = session list top border
+                //   row N+2     = first session content row
+                let banner_h = if self.alert_banner.is_some() { 1u16 } else { 0u16 };
+                let has_data = self.budget.daily_spent > 0.0 || self.global_stats.is_some();
+                let cards_h = if has_data && self.terminal_height >= 13 { 7u16 } else { 0u16 };
+                let body_start = 1u16 + banner_h + cards_h + 1u16;
                 if row >= body_start {
                     let row_in_body = row - body_start;
-                    let row_h = 2u16; // each session row renders date + project (2 lines)
+                    let row_h = 2u16; // each session row renders project + cost (2 lines)
                     let visual_idx = (row_in_body / row_h) as usize;
 
                     // Recompute the same scroll offset used by draw_session_list.
-                    let visible_height = 20usize; // conservative estimate; exact value varies
+                    let visible_height = self.terminal_height.saturating_sub(body_start + 2) as usize;
+                    let visible_height = visible_height.max(4);
                     let scroll = if self.selected_session_idx >= visible_height {
                         self.selected_session_idx - visible_height + 1
                     } else {
@@ -1456,11 +1438,8 @@ impl App {
             Tab::Sessions if self.session_detail_mode => {
                 self.turn_scroll_detail = self.turn_scroll_detail.saturating_sub(1);
             },
-            Tab::Sessions if self.pane_focus == PaneFocus::Left => {
-                self.select_session_delta(-1);
-            },
             Tab::Sessions => {
-                self.turn_scroll_detail = self.turn_scroll_detail.saturating_sub(1);
+                self.select_session_delta(-1);
             },
             _ => {},
         }
@@ -1471,11 +1450,8 @@ impl App {
             Tab::Sessions if self.session_detail_mode => {
                 self.turn_scroll_detail = self.turn_scroll_detail.saturating_add(1);
             },
-            Tab::Sessions if self.pane_focus == PaneFocus::Left => {
-                self.select_session_delta(1);
-            },
             Tab::Sessions => {
-                self.turn_scroll_detail = self.turn_scroll_detail.saturating_add(1);
+                self.select_session_delta(1);
             },
             _ => {},
         }
@@ -2126,6 +2102,9 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
     }
 
     loop {
+        if let Ok(size) = terminal.size() {
+            app.terminal_height = size.height;
+        }
         terminal.draw(|f| draw(f, &app))?;
 
         // Increment hint rotation ticker every ~8 render cycles (~1.6s at 200ms)
