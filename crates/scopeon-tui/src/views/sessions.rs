@@ -962,13 +962,56 @@ fn draw_today_card(f: &mut Frame, app: &App, area: Rect) {
     let t = app.theme;
     let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    let today_row = app.global_stats.as_ref().and_then(|g| {
-        g.daily.iter().find(|r| r.date == today_str)
-    });
-
-    let today_turns = today_row.map(|r| r.turn_count).unwrap_or(0);
-    let today_sessions = today_row.map(|r| r.session_count).unwrap_or(0);
-    let spent = app.budget.daily_spent;
+    // Compute today's stats directly from sessions_list + session_summaries so that
+    // the All view is always consistent with the per-provider/model scoped dashboards,
+    // even when the daily_rollup materialized table hasn't been refreshed yet.
+    let today_sessions = app
+        .sessions_list
+        .iter()
+        .filter(|s| {
+            chrono::DateTime::from_timestamp_millis(s.started_at)
+                .map(|dt| {
+                    dt.with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d")
+                        .to_string()
+                        == today_str
+                })
+                .unwrap_or(false)
+        })
+        .count();
+    let today_cost: f64 = app
+        .sessions_list
+        .iter()
+        .filter(|s| {
+            chrono::DateTime::from_timestamp_millis(s.started_at)
+                .map(|dt| {
+                    dt.with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d")
+                        .to_string()
+                        == today_str
+                })
+                .unwrap_or(false)
+        })
+        .filter_map(|s| app.session_summaries.get(&s.id))
+        .map(|sm| sm.estimated_cost_usd)
+        .sum();
+    let today_turns: i64 = app
+        .sessions_list
+        .iter()
+        .filter(|s| {
+            chrono::DateTime::from_timestamp_millis(s.started_at)
+                .map(|dt| {
+                    dt.with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d")
+                        .to_string()
+                        == today_str
+                })
+                .unwrap_or(false)
+        })
+        .map(|s| s.total_turns)
+        .sum();
+    // Use the higher of the two cost sources (live sessions vs materialized rollup).
+    let spent = today_cost.max(app.budget.daily_spent);
     let limit = app.budget.daily_limit;
 
     let (live_icon, live_color) = if app.is_live {
