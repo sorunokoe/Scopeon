@@ -1772,7 +1772,7 @@ fn draw_preview_header(
     ];
 
     let hint = Line::from(vec![Span::styled(
-        "  Enter: fullscreen  ·  ↑↓: scroll list",
+        "  Enter: fullscreen (Tab → Turns/Context/MCP)  ·  ↑↓: scroll",
         Style::default().fg(m),
     )]);
 
@@ -2538,9 +2538,9 @@ fn draw_detail_header(
         None
     };
 
-    // Line 5: nav hint
+    // Line 5: nav hint  (this header is used in fullscreen detail mode)
     let hint_line = Line::from(vec![Span::styled(
-        "  ↑↓ scroll turns  ·  Enter fullscreen  ·  Tab switch tab",
+        "  Tab: sections  ·  Esc: back  ·  ↑↓: scroll  ·  ← →: replay",
         Style::default().fg(m),
     )]);
 
@@ -2596,24 +2596,21 @@ fn draw_session_detail_fullscreen(f: &mut Frame, app: &App, area: Rect) {
 
     // ── Section selector bar ──────────────────────────────────────────────────
     let m = app.theme.muted_color();
+    let acc = app.theme.accent_color();
     let sections = [DetailSection::Turns, DetailSection::Context, DetailSection::McpSkills];
-    let mut bar_spans = vec![Span::styled(" ", Style::default().fg(m))];
+    let mut bar_spans = vec![Span::styled("  ", Style::default())];
     for sec in &sections {
         let is_active = *sec == app.detail_section;
-        let label = if is_active {
-            format!(" ◆ {} ", sec.label())
-        } else {
-            format!("   {} ", sec.label())
-        };
+        let label = format!(" {} ", sec.label());
         let style = if is_active {
-            Style::default().fg(app.theme.accent_color()).add_modifier(Modifier::BOLD)
+            Style::default().fg(acc).add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
             Style::default().fg(m)
         };
         bar_spans.push(Span::styled(label, style));
-        bar_spans.push(Span::styled(" │", Style::default().fg(m)));
+        bar_spans.push(Span::styled("   ", Style::default()));
     }
-    bar_spans.push(Span::styled("  Tab: switch  Esc: back  ↑↓: scroll  → ←: replay", Style::default().fg(m)));
+    bar_spans.push(Span::styled("  Tab: sections  ·  Esc: back", Style::default().fg(m)));
     f.render_widget(Paragraph::new(Line::from(bar_spans)), v[1]);
 
     // ── Section content ───────────────────────────────────────────────────────
