@@ -42,10 +42,10 @@ default = []
 # OTel OTLP export: planned for future scopeon-otel crate
 
 [dependencies]
-scopeon-core = { path = "crates/scopeon-core", version = "0.8.2" }
-scopeon-collector = { path = "crates/scopeon-collector", version = "0.8.2" }
-scopeon-mcp = { path = "crates/scopeon-mcp", version = "0.8.2" }
-scopeon-tui = { path = "crates/scopeon-tui", version = "0.8.2" }
+scopeon-core = { path = "crates/scopeon-core", version = "0.9.0" }
+scopeon-collector = { path = "crates/scopeon-collector", version = "0.9.0" }
+scopeon-mcp = { path = "crates/scopeon-mcp", version = "0.9.0" }
+scopeon-tui = { path = "crates/scopeon-tui", version = "0.9.0" }
 tokio = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
@@ -61,7 +61,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 tokio-stream = "0.1"
 
 [workspace.package]
-version = "0.8.2"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Scopeon Contributors"]

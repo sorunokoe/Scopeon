@@ -31,6 +31,53 @@ Scopeon follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.0] — 2026-04-29
+
+### Added
+
+- **Split-panel master-detail** — Sessions tab now shows a two-column layout: session list on the
+  left, live session detail on the right. Scroll sessions and the detail updates instantly.
+  Press `Enter` for full-screen detail mode.
+
+- **Charts & Trends** (`t` key) — pressing `t` on the Sessions tab replaces the KPI cards with a
+  3-column 14-day BarChart: cost per day · sessions per day · cache hit rate per day. Press `t`
+  again to return to cards. Per-turn cost sparklines appear inline in the Today card and in the
+  session preview panel.
+
+- **Context Viewer** (section in full-screen detail, `[`/`]` to reach) — for sessions with token
+  data (claude-code etc.): context fill % bar + per-turn sparkline, peak tokens, compaction count,
+  prompt-cache reuse tip. For sessions without token data (copilot-cli): **Activity Timeline** —
+  output tokens sparkline (avg/peak/turn count), response-time sparkline (avg/peak/total), and
+  MCP tool-call density sparkline. Shows real data for every provider.
+
+- **MCP & Skills section** (third section in full-screen detail) — vertical tree layout grouping
+  all interaction events by kind: MCP Servers (with per-server total + each tool on its own
+  indented `├`/`└` row), Built-in Tools, Hooks, Skills. Fully scrollable with `↑`/`↓`. Title
+  shows scroll position (`N/total`) when content overflows.
+
+- **Section navigation with `[` / `]`** — replaces `Tab` for cycling Turns → Context/Activity →
+  MCP & Skills in full-screen detail mode. `[` goes backward, `]` goes forward. Consistent with
+  the existing provider/model scope bar navigation outside detail mode.
+
+- **Contextual hint bar** — the section bar and detail header now show only the keys relevant to
+  the active section (e.g. `← →: replay` only appears when on the Turns section).
+
+- **`cache_hit_rate` formula fix** — previously included `cache_write` tokens in the denominator,
+  understating the true hit rate. Correct formula: `cache_read / (input + cache_read)`. Cache
+  write tokens represent cache priming cost, not cache hit/miss decisions.
+
+- **Provider token availability indicator** — sessions where the provider doesn't export
+  per-turn input/cache tokens (copilot-cli) now show `cache —  token data not available for this
+  provider` instead of `░░░ 0%  saved $0.0000`. Input token count shows `—` instead of `0`.
+
+### Tests
+
+- Added 263 tests across 5 files covering: text truncation, calculation correctness (including a
+  regression test for the `cache_hit_rate` L-1 bug), DB number accuracy, format helpers
+  (`fill_bar`, `fmt_k`, `shorten_model`, `week_trend_str`), and sparkline generation.
+
+---
+
 ## [0.8.2] — 2026-04-27
 
 ### Fixed

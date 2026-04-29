@@ -10,7 +10,7 @@
 
 **The AI context observatory — for every coding agent, every token, every dollar.**
 
-<img src="assets/0-dashboard.png" alt="Scopeon Dashboard" width="900" />
+<img src="assets/sessions-tab.png" alt="Scopeon Sessions" width="900" />
 
 [![CI](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml/badge.svg)](https://github.com/sorunokoe/Scopeon/actions/workflows/ci.yml)
 [![GitHub release](https://img.shields.io/github/v/release/sorunokoe/Scopeon?label=release)](https://github.com/sorunokoe/Scopeon/releases)
@@ -37,6 +37,9 @@
 | "Is the prompt cache actually working?" | Hit-rate gauge, USD saved, optimization suggestions |
 | "How close am I to the context limit?" | Real-time fill bar + *"~12 turns remaining"* prediction |
 | "Which project costs the most?" | Per-project / per-branch cost breakdown |
+| "What did the agent actually call?" | MCP & Skills tree — every server, tool, hook, skill with counts |
+| "Is my context pressure growing over time?" | Context/Activity timeline sparkline per turn in session detail |
+| "How does cost trend week over week?" | 14-day trend chart toggled with `t` — cost · sessions · cache rate |
 | "Did my optimization actually help?" | `compare_sessions` before/after diff |
 | "Can I gate AI cost in CI?" | `scopeon ci report --fail-on-cost-delta 50` |
 | "How is my whole team using AI?" | `scopeon team` — per-author cost from git history, no server needed |
@@ -56,6 +59,14 @@
 ⏳ **"You have ~12 turns left"** — Scopeon tracks context fill rate over time and tells you how many turns remain before the wall. Stop being blindsided mid-task.
 
 🔔 **Context advisory before the crisis** — compaction advisory fires at 55–79% fill when context is accelerating, so you compact at the optimal moment — not after it's too late.
+
+📊 **Charts that make sense instantly** — `t` toggles a 14-day trend chart (cost · sessions · cache rate) directly inside the Sessions view. Per-turn cost sparklines live right in the session preview. No separate screens.
+
+🔍 **Split-panel master-detail** — scroll sessions on the left, live detail on the right. Press Enter for full-screen. Three tab sections (`[` `]` to cycle): **Turns** table · **Context/Activity** timeline · **MCP & Skills** tree.
+
+🧠 **Context Viewer** — for token-rich sessions: context fill % sparkline, peak usage, compaction events, prompt-cache reuse tip. For Copilot CLI: Activity Timeline showing output tokens, response time, and tool-call density per turn — real data in every case.
+
+🔌 **MCP & Skills tree** — every MCP server, every tool call, every hook, every skill used in the session — vertical tree layout with call counts, fully scrollable.
 
 📡 **Zero-token ambient awareness** — every 30 s the MCP server pushes a free status heartbeat to the agent. No polling, no token spend, just continuous situational awareness.
 
@@ -79,23 +90,13 @@
 
 ## Screenshots
 
-![Scopeon Demo](assets/scopeon-demo.gif)
+**Sessions** — split-panel master-detail with session list, live cost sparkline, and per-turn breakdown
 
-**Sessions** — full session list with per-turn cost, cache %, MCP call count
+![Sessions](assets/sessions-tab.png)
 
-![Sessions](assets/1-sessions.png)
+**Spend** — daily/weekly/monthly spend by model, by project, 14-day trend chart
 
-**Insights** — health score, waste signals, cache ROI & optimization tips
-
-![Insights](assets/2-insights.png)
-
-**Budget** — daily/weekly/monthly spend, by model, by project, 14-day chart
-
-![Budget](assets/3-budget.png)
-
-**Providers** — auto-detected agents with data path & session stats
-
-![Providers](assets/4-providers.png)
+![Spend](assets/spend-tab.png)
 
 ---
 
