@@ -27,7 +27,7 @@ jobs:
 
       - name: Run pricing tests
         run: |
-          cargo test --workspace --test-threads=1 -- cost:: 2>&1
+          cargo test --workspace -- --test-threads 1 cost:: 2>&1
 
   open-reminder-issue:
     name: Open monthly reminder issue
