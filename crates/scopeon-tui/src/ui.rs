@@ -101,6 +101,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     match app.tab {
         Tab::Sessions => sessions::draw(f, app, chunks[2]),
         Tab::Spend => budget::draw(f, app, chunks[2]),
+        Tab::Config => crate::views::config::render_config(f, app, chunks[2], &app.theme),
     }
 
     draw_status_bar(f, app, chunks[3], sc);
@@ -853,6 +854,7 @@ fn build_hints(app: &App) -> String {
                 .to_string()
         },
         Tab::Spend => " 1-2:tabs  r:refresh  ?:help  q:quit".to_string(),
+        Tab::Config => " 1-3:tabs  ↑↓:select  Enter:configure  q:quit".to_string(),
     }
 }
 

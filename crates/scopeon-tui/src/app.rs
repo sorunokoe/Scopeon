@@ -15,9 +15,10 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use chrono::{Datelike, Timelike};
 use scopeon_core::{
-    list_provider_optimization_reports, AgentNode, Database, GlobalStats, InteractionEvent,
-    ProjectStats, Session, SessionAnomaly, SessionStats, SessionSummary, TaskRun,
-    ToolBreakdownItem, ToolCall, ToolStat, UserConfig,
+    apply_provider_preset, list_provider_optimization_reports, AgentNode, Database, GlobalStats,
+    InteractionEvent, OptimizationPresetId, OptimizationProviderId, ProjectStats, Session,
+    SessionAnomaly, SessionStats, SessionSummary, TaskRun, ToolBreakdownItem, ToolCall, ToolStat,
+    UserConfig,
 };
 use scopeon_metrics::{
     compute_health_score_with_breakdown, MetricCategory, MetricRegistry, MetricValue, Suggestion,
@@ -56,6 +57,7 @@ impl SessionSort {
 pub enum Tab {
     Sessions = 0,
     Spend = 1,
+    Config = 2,
 }
 
 impl Tab {
@@ -63,6 +65,7 @@ impl Tab {
         match i {
             0 => Tab::Sessions,
             1 => Tab::Spend,
+            2 => Tab::Config,
             _ => Tab::Sessions,
         }
     }
@@ -70,7 +73,7 @@ impl Tab {
         self as usize
     }
     pub fn count() -> usize {
-        const TABS: &[Tab] = &[Tab::Sessions, Tab::Spend];
+        const TABS: &[Tab] = &[Tab::Sessions, Tab::Spend, Tab::Config];
         TABS.len()
     }
 }
@@ -301,6 +304,21 @@ pub struct App {
     pub selected_session_tools: Option<Vec<ToolBreakdownItem>>,
     /// Whether to show the Trends BarChart instead of KPI cards (toggled with `t`).
     pub show_trends: bool,
+
+    // Config tab state
+    pub config_providers: Vec<ConfigProvider>,
+    pub config_selected_idx: usize,
+    pub config_preset_selector_active: bool,
+    pub config_preset_selected_idx: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigProvider {
+    pub id: String,
+    pub display_name: String,
+    pub detected: bool,
+    pub support: String,
+    pub current_preset: Option<String>,
 }
 
 impl Default for App {
@@ -386,6 +404,10 @@ impl App {
             detail_section: DetailSection::Turns,
             selected_session_tools: None,
             show_trends: false,
+            config_providers: Vec::new(),
+            config_selected_idx: 0,
+            config_preset_selector_active: false,
+            config_preset_selected_idx: 0,
         }
     }
 
@@ -844,6 +866,21 @@ impl App {
                 let _ = std::fs::rename(&tmp, &status_path);
             }
         }
+
+        // ── Load config providers for Config tab ─────────────────────────────────
+        if self.config_providers.is_empty() {
+            let reports = list_provider_optimization_reports(&self.config);
+            self.config_providers = reports
+                .into_iter()
+                .map(|r| ConfigProvider {
+                    id: r.provider_id.clone(),
+                    display_name: r.provider_name.clone(),
+                    detected: r.detected,
+                    support: r.support.label().to_string(),
+                    current_preset: r.current_preset.clone(),
+                })
+                .collect();
+        }
     }
 
     pub fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
@@ -1121,6 +1158,60 @@ impl App {
                 KeyCode::Up | KeyCode::Char('k') => {},
                 _ => {},
             },
+            Tab::Config => {
+                if self.config_preset_selector_active {
+                    // Inside preset selector modal
+                    match key {
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if self.config_preset_selected_idx > 0 {
+                                self.config_preset_selected_idx -= 1;
+                            }
+                        },
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if self.config_preset_selected_idx < 3 {
+                                self.config_preset_selected_idx += 1;
+                            }
+                        },
+                        KeyCode::Enter => {
+                            // Apply the selected preset
+                            self.apply_selected_preset();
+                            self.config_preset_selector_active = false;
+                        },
+                        KeyCode::Esc => {
+                            self.config_preset_selector_active = false;
+                        },
+                        _ => {},
+                    }
+                } else {
+                    // Provider list navigation
+                    match key {
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if !self.config_providers.is_empty() && self.config_selected_idx > 0 {
+                                self.config_selected_idx -= 1;
+                            }
+                        },
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if self.config_selected_idx
+                                < self.config_providers.len().saturating_sub(1)
+                            {
+                                self.config_selected_idx += 1;
+                            }
+                        },
+                        KeyCode::Enter => {
+                            // Open preset selector if provider is detected
+                            if let Some(provider) =
+                                self.config_providers.get(self.config_selected_idx)
+                            {
+                                if provider.detected {
+                                    self.config_preset_selector_active = true;
+                                    self.config_preset_selected_idx = 1; // Default to "balanced"
+                                }
+                            }
+                        },
+                        _ => {},
+                    }
+                }
+            },
         }
     }
 
@@ -1147,6 +1238,48 @@ impl App {
         self.selected_session_idx = idx.min(len - 1);
         self.selected_session_stats = None;
         self.selected_session_tools = None;
+    }
+
+    fn apply_selected_preset(&mut self) {
+        let provider = match self.config_providers.get(self.config_selected_idx) {
+            Some(p) => p,
+            None => return,
+        };
+
+        let preset_names = ["most-savings", "balanced", "most-speed", "most-power"];
+        let preset_id = match preset_names.get(self.config_preset_selected_idx) {
+            Some(name) => match OptimizationPresetId::from_alias(name) {
+                Some(id) => id,
+                None => return,
+            },
+            None => return,
+        };
+
+        let provider_id = match OptimizationProviderId::from_alias(&provider.id) {
+            Some(id) => id,
+            None => {
+                self.toast = Some((format!("Unknown provider: {}", provider.id), Instant::now()));
+                return;
+            },
+        };
+
+        match apply_provider_preset(provider_id, preset_id, &mut self.config) {
+            Ok(_) => {
+                self.toast = Some((
+                    format!(
+                        "Applied {} preset to {}",
+                        preset_id.title(),
+                        provider.display_name
+                    ),
+                    Instant::now(),
+                ));
+                // Reload providers to show updated preset
+                self.config_providers.clear();
+            },
+            Err(e) => {
+                self.toast = Some((format!("Failed: {}", e), Instant::now()));
+            },
+        }
     }
 
     /// Returns sessions matching the current filter, ordered by `sessions_sort`.
