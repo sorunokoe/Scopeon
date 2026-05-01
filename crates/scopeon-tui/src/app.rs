@@ -255,6 +255,7 @@ pub struct App {
     pub hint_tick: u64,
     pub sessions_sort: SessionSort,
     pub toast: Option<(String, Instant)>,
+    pub needs_redraw: bool, // Dirty flag for draw-on-change
 
     // IS-4: Zen mode — collapses TUI to a single ambient status line.
     // Auto-expands when context > 80% or budget > 90%.
@@ -419,6 +420,7 @@ impl App {
             config_selected_idx: 0,
             config_preset_selector_active: false,
             config_preset_selected_idx: 0,
+            needs_redraw: true, // Draw on first loop
         }
     }
 
@@ -456,6 +458,7 @@ impl App {
                 // Skip all other heavy DB queries - not needed for Config tab
                 self.last_refresh = Instant::now();
                 self.refresh_in_progress = false;
+                self.needs_redraw = true; // Mark dirty after refresh
                 return;
             },
             _ => {
@@ -502,12 +505,13 @@ impl App {
         self.global_tool_stats = db.get_tool_stats(None).unwrap_or_default();
 
         // ── Agent trees ───────────────────────────────────────────────────────
-        self.agent_roots = db
-            .get_agent_root_ids()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|root_id| db.get_agent_tree(&root_id).ok())
-            .collect();
+        // UNUSED: No tab currently renders agent trees. Skip loading to improve perf.
+        // self.agent_roots = db
+        //     .get_agent_root_ids()
+        //     .unwrap_or_default()
+        //     .into_iter()
+        //     .filter_map(|root_id| db.get_agent_tree(&root_id).ok())
+        //     .collect();
 
         // ── Session list (for Sessions tab) ──────────────────────────────────
         self.sessions_list = db.list_sessions(200).unwrap_or_default();
@@ -544,16 +548,17 @@ impl App {
                     .ok()
                     .filter(|v| !v.is_empty());
             }
-            self.selected_session_interaction_events = db
-                .list_interaction_events_for_session(sel_id, 10_000)
-                .unwrap_or_default();
-            self.selected_session_task_runs =
-                db.list_task_runs_for_session(sel_id).unwrap_or_default();
+            // UNUSED: No tab currently renders these. Skip loading to improve perf.
+            // self.selected_session_interaction_events = db
+            //     .list_interaction_events_for_session(sel_id, 10_000)
+            //     .unwrap_or_default();
+            // self.selected_session_task_runs =
+            //     db.list_task_runs_for_session(sel_id).unwrap_or_default();
         } else {
             self.selected_session_stats = None;
             self.selected_session_tools = None;
-            self.selected_session_interaction_events.clear();
-            self.selected_session_task_runs.clear();
+            // self.selected_session_interaction_events.clear();
+            // self.selected_session_task_runs.clear();
         }
 
         // ── Adaptive thresholds (from historical daily_rollup) ───────────────
@@ -792,6 +797,7 @@ impl App {
         self.last_refresh = Instant::now();
         self.refresh_in_progress = false;
         self.spinner_frame = self.spinner_frame.wrapping_add(1);
+        self.needs_redraw = true; // Mark dirty after refresh
 
         // IS-10: Advance heartbeat pulse phase for animated context bar.
         // Rate scales with context pressure — faster when approaching crisis.
@@ -1128,22 +1134,32 @@ impl App {
             KeyCode::Char('1') => {
                 self.tab = Tab::Sessions;
                 self.pane_focus = PaneFocus::Left;
+                self.needs_redraw = true;
                 return;
             },
             KeyCode::Char('2') => {
                 self.tab = Tab::Spend;
                 self.pane_focus = PaneFocus::Left;
+                self.needs_redraw = true;
                 return;
             },
             KeyCode::Char('3') => {
                 self.tab = Tab::Config;
                 self.pane_focus = PaneFocus::Left;
+                // Invalidate cache when entering Config tab to reload providers
+                self.config_providers.clear();
+                self.needs_redraw = true;
                 return;
             },
             // Tab key: cycle to next tab
             KeyCode::Tab => {
                 let next = (self.tab.index() + 1) % Tab::count();
                 self.tab = Tab::from_index(next);
+                // Invalidate Config cache when entering that tab
+                if self.tab == Tab::Config {
+                    self.config_providers.clear();
+                }
+                self.needs_redraw = true;
                 return;
             },
             KeyCode::BackTab => {
@@ -1153,6 +1169,25 @@ impl App {
                     self.tab.index() - 1
                 };
                 self.tab = Tab::from_index(prev);
+                // Invalidate Config cache when entering that tab
+                if self.tab == Tab::Config {
+                    self.config_providers.clear();
+                }
+                self.needs_redraw = true;
+                return;
+            },
+            KeyCode::BackTab => {
+                let prev = if self.tab.index() == 0 {
+                    Tab::count() - 1
+                } else {
+                    self.tab.index() - 1
+                };
+                self.tab = Tab::from_index(prev);
+                // Invalidate Config cache when entering that tab
+                if self.tab == Tab::Config {
+                    self.config_providers.clear();
+                }
+                self.needs_redraw = true;
                 return;
             },
             _ => {},
@@ -2474,19 +2509,49 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
             app.terminal_height = size.height;
             app.terminal_width = size.width;
         }
-        terminal.draw(|f| draw(f, &app))?;
 
-        // Increment hint rotation ticker every ~8 render cycles (~1.6s at 200ms)
-        app.hint_tick = app.hint_tick.wrapping_add(1);
-        // Advance spinner frame every render tick
-        if app.refresh_in_progress {
-            app.spinner_frame = app.spinner_frame.wrapping_add(1);
+        // ── Draw-on-change optimization ───────────────────────────────────────
+        // Only redraw when needed instead of every loop iteration
+        if app.needs_redraw {
+            terminal.draw(|f| draw(f, &app))?;
+            app.needs_redraw = false;
         }
 
-        if event::poll(Duration::from_millis(200))? {
+        // ── Per-tab base refresh intervals ─────────────────────────────────────
+        // Config: on-demand only (already loaded or after preset apply)
+        // Sessions: 5s base (browsing historical data)
+        // Spend: 10s base (slow-changing aggregates)
+        // Note: The adaptive urgency override happens in refresh() itself,
+        // which adjusts self.refresh_interval based on context pressure.
+        let tab_base_interval = match app.tab {
+            Tab::Config => Duration::from_secs(999_999), // Effectively never auto-refresh
+            Tab::Sessions => Duration::from_secs(5),
+            Tab::Spend => Duration::from_secs(10),
+        };
+
+        // Use the more aggressive of tab base or adaptive urgency interval
+        let effective_interval = tab_base_interval.min(app.refresh_interval);
+
+        // Calculate deadline for next refresh or animation tick
+        let time_until_refresh = effective_interval.saturating_sub(app.last_refresh.elapsed());
+        let animation_tick = if app.refresh_in_progress {
+            Duration::from_millis(100) // Spinner animation
+        } else {
+            Duration::from_millis(5000) // Idle hint rotation
+        };
+        let poll_timeout = time_until_refresh.min(animation_tick);
+
+        // Advance spinner animation when needed
+        if app.refresh_in_progress {
+            app.spinner_frame = app.spinner_frame.wrapping_add(1);
+            app.needs_redraw = true;
+        }
+
+        if event::poll(poll_timeout)? {
             match event::read()? {
                 Event::Key(key) => {
                     app.handle_key(key.code, key.modifiers);
+                    app.needs_redraw = true; // Redraw after input
                     if app.quit {
                         break;
                     }
@@ -2494,21 +2559,24 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
                 // Mouse events — tab switching and scroll wheel
                 Event::Mouse(mouse) => {
                     app.handle_mouse(mouse.column, mouse.row, mouse.kind);
+                    app.needs_redraw = true; // Redraw after mouse input
                 },
                 // Show "too small" screen and clear on resize.
                 Event::Resize(_, _) => {
                     terminal.clear()?;
+                    app.needs_redraw = true;
                 },
                 // Clear on focus regain — covers cases where another window
                 // was overlaid and the terminal compositor didn't fully restore.
                 Event::FocusGained => {
                     terminal.clear()?;
+                    app.needs_redraw = true;
                 },
                 _ => {},
             }
         }
 
-        if app.last_refresh.elapsed() >= app.refresh_interval {
+        if app.last_refresh.elapsed() >= effective_interval {
             app.refresh_in_progress = true;
             if let Some(ro) = &db_ro {
                 app.refresh(ro);
