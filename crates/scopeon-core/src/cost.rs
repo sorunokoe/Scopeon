@@ -1165,10 +1165,7 @@ mod tests {
     fn cache_hit_rate_half_cached() {
         // 500 input, 500 cache_read → 50% hit rate on (input + read)
         let rate = cache_hit_rate(500, 500, 0);
-        assert!(
-            (rate - 0.5).abs() < EPSILON,
-            "expected 0.5, got {rate}"
-        );
+        assert!((rate - 0.5).abs() < EPSILON, "expected 0.5, got {rate}");
     }
 
     #[test]
@@ -1232,11 +1229,13 @@ mod tests {
         ];
         for (model, inp, out, cw, cr) in cases {
             let cost = calculate_turn_cost(model, inp, out, cw, cr);
-            let reconstructed = cost.input_usd + cost.output_usd + cost.cache_write_usd + cost.cache_read_usd;
+            let reconstructed =
+                cost.input_usd + cost.output_usd + cost.cache_write_usd + cost.cache_read_usd;
             assert!(
                 (cost.total_usd - reconstructed).abs() < EPSILON,
                 "{model}: total {:.10} ≠ sum of parts {:.10}",
-                cost.total_usd, reconstructed
+                cost.total_usd,
+                reconstructed
             );
         }
     }
@@ -1245,7 +1244,10 @@ mod tests {
     fn turn_cost_nonzero_for_nonzero_tokens_known_model() {
         // A turn with real token counts must never show $0 cost
         let cost = calculate_turn_cost("claude-sonnet-4-5", 1000, 500, 0, 0);
-        assert!(cost.total_usd > 0.0, "nonzero tokens must produce nonzero cost");
+        assert!(
+            cost.total_usd > 0.0,
+            "nonzero tokens must produce nonzero cost"
+        );
         assert!(cost.input_usd > 0.0);
         assert!(cost.output_usd > 0.0);
     }
@@ -1272,7 +1274,10 @@ mod tests {
     fn cache_savings_read_only_positive_saving() {
         // Reading from cache avoids paying full input price → positive saving
         let saving = cache_savings_usd("claude-sonnet-4-5", 1_000_000, 0);
-        assert!(saving > 0.0, "cache read should yield positive saving, got {saving}");
+        assert!(
+            saving > 0.0,
+            "cache read should yield positive saving, got {saving}"
+        );
     }
 
     #[test]
@@ -1280,14 +1285,20 @@ mod tests {
         // Writing to cache costs more than plain input for claude models
         // → net saving is ≤ 0.0 (no reads to offset the write overhead)
         let saving = cache_savings_usd("claude-sonnet-4-5", 0, 1_000_000);
-        assert!(saving <= 0.0, "write-only cache should not yield net positive saving, got {saving}");
+        assert!(
+            saving <= 0.0,
+            "write-only cache should not yield net positive saving, got {saving}"
+        );
     }
 
     #[test]
     fn cache_savings_can_be_negative_when_write_overhead_exceeds_read_savings() {
         // Write 1M tokens, read only 1 token → overhead far exceeds tiny saving
         let saving = cache_savings_usd("claude-sonnet-4-5", 1, 1_000_000);
-        assert!(saving < 0.0, "high write/low read should produce negative net saving, got {saving}");
+        assert!(
+            saving < 0.0,
+            "high write/low read should produce negative net saving, got {saving}"
+        );
     }
 
     // ── shadow_cost ───────────────────────────────────────────────────────────
@@ -1295,29 +1306,30 @@ mod tests {
     #[test]
     fn shadow_cost_same_model_prefix_returns_none() {
         // Comparing a model to itself → no shadow cost (would be trivial)
-        let result = shadow_cost(
-            "claude-sonnet-4-5", "claude-sonnet-4-5",
-            1000, 500, 0, 0,
-        );
+        let result = shadow_cost("claude-sonnet-4-5", "claude-sonnet-4-5", 1000, 500, 0, 0);
         assert!(result.is_none(), "same model should return None");
     }
 
     #[test]
     fn shadow_cost_different_models_returns_some() {
         let result = shadow_cost(
-            "claude-haiku-4-5-20251001", "claude-opus-4-5",
-            1000, 500, 0, 0,
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-5",
+            1000,
+            500,
+            0,
+            0,
         );
         assert!(result.is_some(), "different models should return Some");
-        assert!(result.unwrap() > 0.0, "shadow cost must be positive for nonzero tokens");
+        assert!(
+            result.unwrap() > 0.0,
+            "shadow cost must be positive for nonzero tokens"
+        );
     }
 
     #[test]
     fn shadow_cost_zero_tokens_returns_zero_cost() {
-        let result = shadow_cost(
-            "claude-haiku-4-5-20251001", "claude-opus-4-5",
-            0, 0, 0, 0,
-        );
+        let result = shadow_cost("claude-haiku-4-5-20251001", "claude-opus-4-5", 0, 0, 0, 0);
         assert_eq!(result, Some(0.0));
     }
 
@@ -1326,10 +1338,18 @@ mod tests {
         // Opus is more expensive than Haiku → shadow cost > actual cost
         let actual = calculate_turn_cost("claude-haiku-4-5-20251001", 10_000, 5_000, 0, 0);
         let shadow = shadow_cost(
-            "claude-haiku-4-5-20251001", "claude-opus-4-5",
-            10_000, 5_000, 0, 0,
-        ).unwrap();
-        assert!(shadow > actual.total_usd,
-            "opus shadow cost {shadow} should exceed haiku actual {}", actual.total_usd);
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-5",
+            10_000,
+            5_000,
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(
+            shadow > actual.total_usd,
+            "opus shadow cost {shadow} should exceed haiku actual {}",
+            actual.total_usd
+        );
     }
 }

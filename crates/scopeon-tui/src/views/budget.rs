@@ -174,10 +174,7 @@ fn draw_period_card(f: &mut Frame, app: &App, label: &str, spent: f64, limit: f6
                     format!("${:.2} remaining", remaining),
                     Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    format!("  {}", status_icon),
-                    Style::default().fg(bar_color),
-                ),
+                Span::styled(format!("  {}", status_icon), Style::default().fg(bar_color)),
             ])
         }
     } else {
@@ -417,10 +414,15 @@ fn draw_provider_model_tree(f: &mut Frame, app: &App, area: Rect) {
 
     // Sort providers by total cost descending.
     let mut sorted_providers: Vec<(&str, f64)> = provider_totals.into_iter().collect();
-    sorted_providers.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_providers
+        .sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
 
     let grand_total: f64 = sorted_providers.iter().map(|(_, c)| c).sum();
-    let max = sorted_providers.first().map(|(_, c)| *c).unwrap_or(1.0).max(1.0);
+    let max = sorted_providers
+        .first()
+        .map(|(_, c)| *c)
+        .unwrap_or(1.0)
+        .max(1.0);
 
     let bar_w = 8usize;
     let inner_w = area.width.saturating_sub(2) as usize;
@@ -436,13 +438,19 @@ fn draw_provider_model_tree(f: &mut Frame, app: &App, area: Rect) {
         let ratio = prov_total / max;
         let filled = (ratio * bar_w as f64) as usize;
         let bar = "█".repeat(filled) + &"░".repeat(bar_w - filled);
-        let pct = if grand_total > 0.0 { prov_total / grand_total * 100.0 } else { 0.0 };
+        let pct = if grand_total > 0.0 {
+            prov_total / grand_total * 100.0
+        } else {
+            0.0
+        };
         let short_name = truncate_with_ellipsis(provider, name_w);
         // Provider row — bold, full-width bar
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {:<name_w$}", short_name, name_w = name_w),
-                Style::default().fg(app.theme.heading_color()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(app.theme.heading_color())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("{:>7} {:>4.0}%", format!("${:.2}", prov_total), pct),
@@ -466,7 +474,11 @@ fn draw_provider_model_tree(f: &mut Frame, app: &App, area: Rect) {
             let short_model = truncate_with_ellipsis(&short_model, name_w.saturating_sub(2));
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("   └─{:<name_w$}", short_model, name_w = name_w.saturating_sub(2)),
+                    format!(
+                        "   └─{:<name_w$}",
+                        short_model,
+                        name_w = name_w.saturating_sub(2)
+                    ),
                     Style::default().fg(model_color),
                 ),
                 Span::styled(
@@ -515,7 +527,10 @@ fn draw_project_breakdown(f: &mut Frame, app: &App, area: Rect) {
                 format!("{:>8}", format!("${:.2}", cost)),
                 Style::default().fg(app.theme.cost_color()),
             ),
-            Span::styled(format!("  {}", bar), Style::default().fg(app.theme.cost_color())),
+            Span::styled(
+                format!("  {}", bar),
+                Style::default().fg(app.theme.cost_color()),
+            ),
         ]));
     }
     if lines.is_empty() {
@@ -556,7 +571,10 @@ fn draw_tag_breakdown(f: &mut Frame, app: &App, area: Rect) {
                 format!(" ({:>2})", count),
                 Style::default().fg(app.theme.muted_color()),
             ),
-            Span::styled(format!(" {}", bar), Style::default().fg(app.theme.warning_color())),
+            Span::styled(
+                format!(" {}", bar),
+                Style::default().fg(app.theme.warning_color()),
+            ),
         ]));
     }
     if lines.is_empty() {

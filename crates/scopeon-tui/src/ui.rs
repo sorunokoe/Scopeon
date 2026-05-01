@@ -65,7 +65,11 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // Compact and Standard: tab-based layout.
     let sc = size_class(area);
-    let banner_height = if app.alert_banner.is_some() { 1u16 } else { 0u16 };
+    let banner_height = if app.alert_banner.is_some() {
+        1u16
+    } else {
+        0u16
+    };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -544,15 +548,9 @@ fn draw_tab_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
 
     // Compact mode: very short labels to fit 55-79 col terminals.
     let tab_labels: &[(&str, Tab, &str)] = if sc == SizeClass::Compact {
-        &[
-            ("1", Tab::Sessions, "Sess"),
-            ("2", Tab::Spend, "Spnd"),
-        ]
+        &[("1", Tab::Sessions, "Sess"), ("2", Tab::Spend, "Spnd")]
     } else {
-        &[
-            ("1", Tab::Sessions, "Sessions"),
-            ("2", Tab::Spend, "Spend"),
-        ]
+        &[("1", Tab::Sessions, "Sessions"), ("2", Tab::Spend, "Spend")]
     };
 
     let mut spans: Vec<Span> = vec![logo_badge(app.theme)];
@@ -668,7 +666,9 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
         let spans = vec![
             Span::styled(
                 format!(" {} ", model),
-                Style::default().fg(app.theme.model_color()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(app.theme.model_color())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled("│", Style::default().fg(muted)),
             Span::styled(
@@ -755,8 +755,8 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
     let zones = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(26), // left: model + badge
-            Constraint::Min(0),     // center: health + cost + cache + hints
+            Constraint::Length(26),      // left: model + badge
+            Constraint::Min(0),          // center: health + cost + cache + hints
             Constraint::Length(right_w), // right: context zone (urgency bg)
         ])
         .split(area);
@@ -765,7 +765,9 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
     let left_spans = vec![
         Span::styled(
             format!(" {} ", truncate_to_chars(&model, 14)),
-            Style::default().fg(app.theme.model_color()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(app.theme.model_color())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled("│", Style::default().fg(muted)),
         Span::styled(
@@ -780,14 +782,19 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
         Span::styled("│", Style::default().fg(muted)),
         Span::styled(
             format!(" ⬡ {:.0} ", app.health_score),
-            Style::default().fg(health_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(health_color)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled("│ ", Style::default().fg(muted)),
         Span::styled(
             format!("${:.2} {} ", app.budget.daily_spent, spark),
             Style::default().fg(app.theme.cost_color()),
         ),
-        Span::styled(format!("{} ", cost_trend_char), Style::default().fg(trend_color)),
+        Span::styled(
+            format!("{} ", cost_trend_char),
+            Style::default().fg(trend_color),
+        ),
         Span::styled("│ ", Style::default().fg(muted)),
         Span::styled(
             format!("Cache {:.0}%  ", cache_pct),
@@ -805,9 +812,14 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
         Span::styled("│ ", Style::default().fg(right_fg_muted).bg(right_bg)),
         Span::styled(
             format!("Ctx {} {:.0}%{} ", ctx_bar, ctx_pct, turns_remaining_str),
-            Style::default().fg(right_fg).bg(right_bg).add_modifier(
-                if ctx_pct >= 80.0 { Modifier::BOLD } else { Modifier::empty() },
-            ),
+            Style::default()
+                .fg(right_fg)
+                .bg(right_bg)
+                .add_modifier(if ctx_pct >= 80.0 {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
         ),
         Span::styled(
             format!("│ {} ", refresh_str),
@@ -899,7 +911,12 @@ fn draw_command_palette(f: &mut Frame, app: &App, area: Rect) {
     let h = content_h.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
-    let popup = Rect { x, y, width: w, height: h };
+    let popup = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
 
     // Clear the area so the overlay is opaque.
     f.render_widget(ratatui::widgets::Clear, popup);
@@ -912,7 +929,10 @@ fn draw_command_palette(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(" Command ", Style::default().fg(accent).add_modifier(Modifier::BOLD)))
+        .title(Span::styled(
+            " Command ",
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ))
         .border_style(Style::default().fg(accent));
     let inner = block.inner(popup);
     f.render_widget(block, popup);
@@ -949,10 +969,7 @@ fn draw_command_palette(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(muted)),
                 Span::styled(label.to_string(), label_style),
-                Span::styled(
-                    format!("  {}", desc),
-                    Style::default().fg(text_sec),
-                ),
+                Span::styled(format!("  {}", desc), Style::default().fg(text_sec)),
             ]));
         }
     }

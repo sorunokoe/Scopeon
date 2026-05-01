@@ -56,6 +56,8 @@
 
 ⚡ **Prompt cache that *actually* tells you if it's working** — hit-rate gauge, dollars saved vs. uncached baseline. Know in seconds whether your cache setup is doing anything.
 
+🛠️ **Provider optimizer** — inspect official Claude Code, Copilot CLI, Codex, and Gemini efficiency controls, preview Scopeon-managed launchers/config artifacts, and apply presets like `most-savings`, `balanced`, `most-speed`, and `most-power`.
+
 ⏳ **"You have ~12 turns left"** — Scopeon tracks context fill rate over time and tells you how many turns remain before the wall. Stop being blindsided mid-task.
 
 🔔 **Context advisory before the crisis** — compaction advisory fires at 55–79% fill when context is accelerating, so you compact at the optimal moment — not after it's too late.
@@ -97,6 +99,10 @@
 **Spend** — daily/weekly/monthly spend by model, by project, 14-day trend chart
 
 ![Spend](assets/spend-tab.png)
+
+**GitHub Copilot CLI MCP** — Scopeon tools and live context/spend stats inside Copilot CLI
+
+![GitHub Copilot CLI MCP](assets/mcp-copilot.png)
 
 ---
 
@@ -145,6 +151,7 @@ Download from [GitHub Releases](https://github.com/sorunokoe/Scopeon/releases):
 ```bash
 scopeon onboard    # auto-detect AI tools, configure MCP + shell integration
 scopeon            # open the TUI dashboard
+scopeon optimize scan
 scopeon serve      # browser dashboard → http://localhost:7771
 scopeon status     # quick inline stats, no TUI
 scopeon doctor     # health diagnostics
@@ -170,6 +177,9 @@ scopeon serve [--port N] [--tier 0-3]
 scopeon tag set <id> feature   # tag sessions for cost attribution
 scopeon export --format csv --days 30
 scopeon reprice                # recalculate costs after a price change
+scopeon optimize scan
+scopeon optimize explain --provider claude-code
+scopeon optimize apply --provider codex --preset balanced
 
 scopeon digest [--days N] [--post-to-slack <url>]
 scopeon badge [--format markdown|url|html]
@@ -204,7 +214,7 @@ scopeon doctor                 # health diagnostics
 
 ## Supported Providers
 
-Claude Code · GitHub Copilot CLI · Aider · Cursor · Gemini CLI · Ollama · Generic OpenAI
+Claude Code · GitHub Copilot CLI · OpenAI Codex CLI · Aider · Cursor · Gemini CLI · Ollama · Generic OpenAI
 
 Scopeon discovers log files automatically — no config needed for standard install paths.
 Adding a new provider takes ~50 lines of Rust. See [docs/providers.md](docs/providers.md).

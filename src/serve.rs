@@ -51,7 +51,11 @@ use tokio_stream::StreamExt as _;
 use tower_http::cors::CorsLayer;
 
 use scopeon_core::user_config::UserConfig;
-use scopeon_core::{derive_hook_effects, interaction_token_total, provider_capabilities, Database};
+use scopeon_core::{
+    derive_hook_effects, interaction_token_total, list_provider_optimization_reports,
+    preview_provider_preset, provider_capabilities, Database, OptimizationPresetId,
+    OptimizationProviderId,
+};
 
 /// Embedded single-file dashboard served at `GET /`.
 static DASHBOARD_HTML: &str = include_str!("dashboard.html");
@@ -76,6 +80,17 @@ struct ServeState {
 struct SessionDetailQuery {
     session_id: Option<String>,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ProviderOptimizationQuery {
+    provider: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ProviderPresetPreviewQuery {
+    provider: Option<String>,
+    preset: Option<String>,
 }
 
 /// Start the HTTP server.
@@ -170,6 +185,14 @@ pub async fn run_serve(
             "/api/v1/provider-capabilities",
             get(handle_provider_capabilities),
         )
+        .route(
+            "/api/v1/provider-optimizations",
+            get(handle_provider_optimizations),
+        )
+        .route(
+            "/api/v1/provider-optimizations/preview",
+            get(handle_provider_preset_preview),
+        )
         .route("/ws/v1/metrics", get(handle_ws))
         .route("/sse/v1/status", get(handle_sse_status))
         .layer(cors)
@@ -213,6 +236,8 @@ pub async fn run_serve(
     if tier >= 2 {
         eprintln!("     GET /api/v1/context       — context pressure (latest session)");
         eprintln!("     GET /api/v1/sessions      — per-session metadata");
+        eprintln!("     GET /api/v1/provider-optimizations — provider optimization catalog");
+        eprintln!("     GET /api/v1/provider-optimizations/preview — preset artifact preview");
     }
     if tier >= 3 {
         eprintln!("     GET /api/v1/interactions  — detailed interaction provenance");
@@ -758,6 +783,65 @@ async fn handle_provider_capabilities(
     match result {
         Ok(v) => json_response(v),
         Err(e) => error_response(e),
+    }
+}
+
+/// `GET /api/v1/provider-optimizations` — supported provider optimization catalog (tier ≥ 2).
+async fn handle_provider_optimizations(
+    State(state): State<ServeState>,
+    Query(query): Query<ProviderOptimizationQuery>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = tier_access_guard(&state, &headers, 2) {
+        return response;
+    }
+
+    let reports = list_provider_optimization_reports(&state.config);
+    if let Some(provider) = query.provider.as_deref() {
+        let Some(provider_id) = OptimizationProviderId::from_alias(provider) else {
+            return error_response(anyhow::anyhow!("Unknown provider '{}'", provider));
+        };
+        let report = reports
+            .into_iter()
+            .find(|report| report.provider_id == provider_id.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Unknown provider '{}'", provider));
+        return match report {
+            Ok(report) => json_response(json!(report)),
+            Err(err) => error_response(err),
+        };
+    }
+
+    json_response(json!({ "providers": reports }))
+}
+
+/// `GET /api/v1/provider-optimizations/preview` — preview a provider preset (tier ≥ 2).
+async fn handle_provider_preset_preview(
+    State(state): State<ServeState>,
+    Query(query): Query<ProviderPresetPreviewQuery>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = tier_access_guard(&state, &headers, 2) {
+        return response;
+    }
+
+    let Some(provider) = query.provider.as_deref() else {
+        return error_response(anyhow::anyhow!(
+            "Missing required query parameter 'provider'"
+        ));
+    };
+    let Some(preset) = query.preset.as_deref() else {
+        return error_response(anyhow::anyhow!("Missing required query parameter 'preset'"));
+    };
+    let Some(provider_id) = OptimizationProviderId::from_alias(provider) else {
+        return error_response(anyhow::anyhow!("Unknown provider '{}'", provider));
+    };
+    let Some(preset_id) = OptimizationPresetId::from_alias(preset) else {
+        return error_response(anyhow::anyhow!("Unknown preset '{}'", preset));
+    };
+
+    match preview_provider_preset(provider_id, preset_id, &state.config) {
+        Ok(preview) => json_response(json!(preview)),
+        Err(err) => error_response(err),
     }
 }
 

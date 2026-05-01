@@ -48,8 +48,8 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
-    // Lay out cards in a 2-column grid; each card is 5 lines tall.
-    let card_h = 5u16;
+    // Lay out cards in a 2-column grid; each card is 6 lines tall.
+    let card_h = 6u16;
     let providers = &app.providers;
     let cols = if inner.width >= 80 { 2usize } else { 1usize };
     let rows_needed = providers.len().div_ceil(cols);
@@ -84,12 +84,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_provider_card(
-    f: &mut Frame,
-    app: &App,
-    p: &crate::app::ProviderStatus,
-    area: Rect,
-) {
+fn draw_provider_card(f: &mut Frame, app: &App, p: &crate::app::ProviderStatus, area: Rect) {
     let is_detect_only = DETECTION_ONLY.contains(&p.id.as_str());
 
     let (status_icon, status_label, status_color) = if p.is_active && !is_detect_only {
@@ -123,6 +118,15 @@ fn draw_provider_card(
     };
 
     let path_hint = truncate_with_ellipsis(&p.config_hint, (area.width.saturating_sub(4)) as usize);
+    let optimization_hint = truncate_with_ellipsis(
+        &p.optimization_status,
+        (area.width.saturating_sub(4)) as usize,
+    );
+    let optimization_color = if p.optimization_status.contains("observe only") {
+        app.theme.muted_color()
+    } else {
+        app.theme.accent_color()
+    };
 
     let lines = vec![
         // Name + status badge
@@ -145,6 +149,10 @@ fn draw_provider_card(
         Line::from(Span::styled(
             format!("  {}", path_hint),
             Style::default().fg(app.theme.muted_color()),
+        )),
+        Line::from(Span::styled(
+            format!("  {}", optimization_hint),
+            Style::default().fg(optimization_color),
         )),
     ];
 

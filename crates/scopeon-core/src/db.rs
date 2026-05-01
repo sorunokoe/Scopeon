@@ -2853,11 +2853,18 @@ mod tests {
         let stats = db.get_global_stats().unwrap();
         assert!(stats.total_sessions > 0, "must count session, got 0");
         assert!(stats.total_turns > 0, "must count turn, got 0");
-        assert!(stats.total_input_tokens > 0, "must count input tokens, got 0");
-        assert!(stats.total_output_tokens > 0, "must count output tokens, got 0");
+        assert!(
+            stats.total_input_tokens > 0,
+            "must count input tokens, got 0"
+        );
+        assert!(
+            stats.total_output_tokens > 0,
+            "must count output tokens, got 0"
+        );
         assert!(
             stats.estimated_cost_usd > 0.0,
-            "must show cost, got {}", stats.estimated_cost_usd
+            "must show cost, got {}",
+            stats.estimated_cost_usd
         );
     }
 
@@ -2883,8 +2890,11 @@ mod tests {
         assert_eq!(stats.total_turns, 3);
         assert_eq!(stats.total_input_tokens, 3_000);
         assert_eq!(stats.total_output_tokens, 1_200);
-        assert!((stats.estimated_cost_usd - 0.03).abs() < 1e-6,
-            "expected $0.03, got ${}", stats.estimated_cost_usd);
+        assert!(
+            (stats.estimated_cost_usd - 0.03).abs() < 1e-6,
+            "expected $0.03, got ${}",
+            stats.estimated_cost_usd
+        );
     }
 
     // ── SessionStats aggregation correctness ─────────────────────────────────
@@ -2911,7 +2921,8 @@ mod tests {
         assert_eq!(stats.total_output_tokens, 300);
         assert!(
             (stats.estimated_cost_usd - 0.050).abs() < 1e-6,
-            "expected $0.05, got ${}", stats.estimated_cost_usd
+            "expected $0.05, got ${}",
+            stats.estimated_cost_usd
         );
     }
 
@@ -2930,12 +2941,17 @@ mod tests {
         }
 
         let stats = db.get_session_stats("s-sstats-multi").unwrap();
-        assert_eq!(stats.total_turns, 5, "must count all 5 turns, got {}", stats.total_turns);
+        assert_eq!(
+            stats.total_turns, 5,
+            "must count all 5 turns, got {}",
+            stats.total_turns
+        );
         assert_eq!(stats.total_input_tokens, 500);
         assert_eq!(stats.total_output_tokens, 250);
         assert!(
             (stats.estimated_cost_usd - 0.005).abs() < 1e-6,
-            "expected $0.005, got ${}", stats.estimated_cost_usd
+            "expected $0.005, got ${}",
+            stats.estimated_cost_usd
         );
     }
 
@@ -2955,7 +2971,8 @@ mod tests {
         // hit_rate = read / (input + read) = 500 / 1000 = 0.5
         assert!(
             (stats.cache_hit_rate - 0.5).abs() < 1e-6,
-            "expected 50% hit rate, got {:.4}", stats.cache_hit_rate
+            "expected 50% hit rate, got {:.4}",
+            stats.cache_hit_rate
         );
     }
 
@@ -2977,7 +2994,8 @@ mod tests {
         // With correct formula:  500 / (500 + 500) = 0.5
         assert!(
             (stats.cache_hit_rate - 0.5).abs() < 1e-6,
-            "cache_write inflated denominator: expected 0.5, got {:.6}", stats.cache_hit_rate
+            "cache_write inflated denominator: expected 0.5, got {:.6}",
+            stats.cache_hit_rate
         );
     }
 
@@ -2999,11 +3017,13 @@ mod tests {
         let sum = sum.unwrap();
         assert!(
             sum.estimated_cost_usd > 0.0,
-            "cost must be non-zero, got {}", sum.estimated_cost_usd
+            "cost must be non-zero, got {}",
+            sum.estimated_cost_usd
         );
         assert!(
             (sum.estimated_cost_usd - 0.42).abs() < 1e-6,
-            "expected $0.42, got ${}", sum.estimated_cost_usd
+            "expected $0.42, got ${}",
+            sum.estimated_cost_usd
         );
     }
 
@@ -3021,11 +3041,15 @@ mod tests {
         db.upsert_turn(&t).unwrap();
 
         let summaries = db.list_session_summaries(10).unwrap();
-        let sum = summaries.iter().find(|s| s.session_id == "s-summary-hitrate").unwrap();
+        let sum = summaries
+            .iter()
+            .find(|s| s.session_id == "s-summary-hitrate")
+            .unwrap();
         // hit_rate = 800 / (200 + 800) = 0.8
         assert!(
             (sum.cache_hit_rate - 0.8).abs() < 1e-6,
-            "expected 80% hit rate, got {:.4}", sum.cache_hit_rate
+            "expected 80% hit rate, got {:.4}",
+            sum.cache_hit_rate
         );
     }
 
@@ -3058,8 +3082,14 @@ mod tests {
 
         let (claude_sessions, _) = map["claude-code"];
         let (copilot_sessions, _) = map["copilot-cli"];
-        assert_eq!(claude_sessions, 3, "expected 3 claude sessions, got {claude_sessions}");
-        assert_eq!(copilot_sessions, 2, "expected 2 copilot sessions, got {copilot_sessions}");
+        assert_eq!(
+            claude_sessions, 3,
+            "expected 3 claude sessions, got {claude_sessions}"
+        );
+        assert_eq!(
+            copilot_sessions, 2,
+            "expected 2 copilot sessions, got {copilot_sessions}"
+        );
     }
 
     // ── get_session_tool_breakdown — must return items when events exist ──────
@@ -3098,14 +3128,21 @@ mod tests {
         }
 
         let items = db.get_session_tool_breakdown("s-tools-mcp").unwrap();
-        assert!(!items.is_empty(), "must return at least one item for MCP events");
+        assert!(
+            !items.is_empty(),
+            "must return at least one item for MCP events"
+        );
 
         let mcp_item = items.iter().find(|i| i.kind == "mcp");
         assert!(mcp_item.is_some(), "must include an mcp kind item");
         let mcp_item = mcp_item.unwrap();
         assert_eq!(mcp_item.server, "gitnexus");
         assert_eq!(mcp_item.name, "query");
-        assert_eq!(mcp_item.count, 3, "must count all 3 events, got {}", mcp_item.count);
+        assert_eq!(
+            mcp_item.count, 3,
+            "must count all 3 events, got {}",
+            mcp_item.count
+        );
     }
 
     #[test]
@@ -3135,7 +3172,10 @@ mod tests {
         db.upsert_interaction_event(&ev_b).unwrap();
 
         let items_a = db.get_session_tool_breakdown("s-tools-iso-a").unwrap();
-        assert!(items_a.is_empty(), "session A must not see session B events");
+        assert!(
+            items_a.is_empty(),
+            "session A must not see session B events"
+        );
     }
 
     // ── get_session_aggregates matches get_session_stats for aggregate fields ─
@@ -3160,13 +3200,21 @@ mod tests {
         let agg = db.get_session_aggregates("s-agg-match").unwrap();
 
         assert_eq!(stats.total_turns, agg.total_turns, "total_turns must match");
-        assert_eq!(stats.total_input_tokens, agg.total_input_tokens, "input tokens must match");
-        assert_eq!(stats.total_output_tokens, agg.total_output_tokens, "output tokens must match");
+        assert_eq!(
+            stats.total_input_tokens, agg.total_input_tokens,
+            "input tokens must match"
+        );
+        assert_eq!(
+            stats.total_output_tokens, agg.total_output_tokens,
+            "output tokens must match"
+        );
         assert_eq!(stats.total_cache_read_tokens, agg.total_cache_read_tokens);
         assert_eq!(stats.total_cache_write_tokens, agg.total_cache_write_tokens);
         assert!(
             (stats.estimated_cost_usd - agg.estimated_cost_usd).abs() < 1e-9,
-            "cost mismatch: stats={}, agg={}", stats.estimated_cost_usd, agg.estimated_cost_usd
+            "cost mismatch: stats={}, agg={}",
+            stats.estimated_cost_usd,
+            agg.estimated_cost_usd
         );
     }
 }

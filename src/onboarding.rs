@@ -275,6 +275,10 @@ pub fn cmd_onboard() -> Result<()> {
     writeln!(out, "  scopeon start          — open TUI dashboard")?;
     writeln!(
         out,
+        "  scopeon optimize scan  — inspect provider optimization presets"
+    )?;
+    writeln!(
+        out,
         "  scopeon serve          — start API server for team sharing"
     )?;
     writeln!(out, "  scopeon digest         — weekly AI usage report")?;

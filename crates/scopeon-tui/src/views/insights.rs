@@ -124,15 +124,24 @@ fn draw_provider_summary(f: &mut Frame, app: &App, area: Rect) {
     let mut stat_spans: Vec<Span<'static>> = vec![Span::raw("  ".to_string())];
     for (i, provider) in app.all_providers.iter().enumerate() {
         if i > 0 {
-            stat_spans.push(Span::styled("   ·   ".to_string(), Style::default().fg(t.muted_color())));
+            stat_spans.push(Span::styled(
+                "   ·   ".to_string(),
+                Style::default().fg(t.muted_color()),
+            ));
         }
         let (count, cache_sum) = stats.get(provider).copied().unwrap_or((0, 0.0));
-        let avg_cache = if count > 0 { cache_sum / count as f64 * 100.0 } else { 0.0 };
+        let avg_cache = if count > 0 {
+            cache_sum / count as f64 * 100.0
+        } else {
+            0.0
+        };
         let cost = costs.get(provider).copied().unwrap_or(0.0);
         let pname = truncate_with_ellipsis(provider, 14);
         stat_spans.push(Span::styled(
             format!("◈ {}  ", pname),
-            Style::default().fg(t.heading_color()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(t.heading_color())
+                .add_modifier(Modifier::BOLD),
         ));
         stat_spans.push(Span::styled(
             format!("${:.2}  ", cost),

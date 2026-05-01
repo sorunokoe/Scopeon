@@ -94,6 +94,13 @@ impl Default for BudgetConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OptimizerConfig {
+    /// Last preset Scopeon applied per provider, keyed by provider id.
+    #[serde(default)]
+    pub applied_presets: HashMap<String, String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserConfig {
     pub general: GeneralConfig,
@@ -101,6 +108,8 @@ pub struct UserConfig {
     pub dashboard: DashboardConfig,
     pub alerts: AlertsConfig,
     pub budget: BudgetConfig,
+    #[serde(default)]
+    pub optimizer: OptimizerConfig,
     #[serde(default)]
     pub pricing: PricingConfig,
     /// Storage and data-retention settings.
@@ -206,6 +215,7 @@ impl Default for UserConfig {
                 webhooks: Vec::new(),
             },
             budget: BudgetConfig::default(),
+            optimizer: OptimizerConfig::default(),
             pricing: PricingConfig::default(),
             storage: StorageConfig::default(),
         }

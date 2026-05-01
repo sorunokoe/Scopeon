@@ -206,7 +206,11 @@ mod tests {
     #[test]
     fn sparkline_empty_values_returns_spaces() {
         let result = micro_sparkline(&[], 5);
-        assert_eq!(result.chars().count(), 5, "empty values must produce width spaces");
+        assert_eq!(
+            result.chars().count(),
+            5,
+            "empty values must produce width spaces"
+        );
         assert!(result.chars().all(|c| c == ' '));
     }
 
@@ -231,7 +235,10 @@ mod tests {
     fn sparkline_single_value_returns_single_highest_bar() {
         let result = micro_sparkline(&[42.0], 1);
         assert_eq!(result.chars().count(), 1);
-        assert_eq!(result, "█", "single nonzero value must be max bar ▇ or █: {result:?}");
+        assert_eq!(
+            result, "█",
+            "single nonzero value must be max bar ▇ or █: {result:?}"
+        );
     }
 
     #[test]
@@ -259,9 +266,15 @@ mod tests {
         assert_eq!(result.chars().count(), 5);
         let bars: Vec<char> = result.chars().collect();
         // Last bar (max value) must be '█' (index 7)
-        assert_eq!(bars[4], '█', "ascending series must end at max bar: {result:?}");
+        assert_eq!(
+            bars[4], '█',
+            "ascending series must end at max bar: {result:?}"
+        );
         // First bar (min, non-zero) must be lower than last
-        assert!(bars[0] < bars[4], "ascending series must start lower: {result:?}");
+        assert!(
+            bars[0] < bars[4],
+            "ascending series must start lower: {result:?}"
+        );
     }
 
     #[test]

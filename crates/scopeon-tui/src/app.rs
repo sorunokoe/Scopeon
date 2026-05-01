@@ -15,8 +15,9 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use chrono::{Datelike, Timelike};
 use scopeon_core::{
-    AgentNode, Database, GlobalStats, InteractionEvent, ProjectStats, Session, SessionAnomaly,
-    SessionStats, SessionSummary, TaskRun, ToolBreakdownItem, ToolCall, ToolStat, UserConfig,
+    list_provider_optimization_reports, AgentNode, Database, GlobalStats, InteractionEvent,
+    ProjectStats, Session, SessionAnomaly, SessionStats, SessionSummary, TaskRun,
+    ToolBreakdownItem, ToolCall, ToolStat, UserConfig,
 };
 use scopeon_metrics::{
     compute_health_score_with_breakdown, MetricCategory, MetricRegistry, MetricValue, Suggestion,
@@ -164,6 +165,7 @@ pub struct ProviderStatus {
     pub turn_count: usize,
     pub last_update: Option<String>,
     pub config_hint: String,
+    pub optimization_status: String,
 }
 
 pub struct App {
@@ -421,7 +423,7 @@ impl App {
         // ── Global stats ─────────────────────────────────────────────────────
         self.global_stats = db.get_global_stats().ok();
         let provider_db_stats = db.get_stats_by_provider().unwrap_or_default();
-        self.providers = build_provider_status(&provider_db_stats);
+        self.providers = build_provider_status(&provider_db_stats, &self.config);
         self.project_stats = db.get_project_stats().unwrap_or_default();
         self.session_anomalies = db.get_session_anomalies().unwrap_or_default();
         self.global_tool_stats = db.get_tool_stats(None).unwrap_or_default();
@@ -464,8 +466,10 @@ impl App {
             {
                 self.selected_session_stats = db.get_session_stats(sel_id).ok();
                 // Also reload tool breakdown whenever stats change.
-                self.selected_session_tools =
-                    db.get_session_tool_breakdown(sel_id).ok().filter(|v| !v.is_empty());
+                self.selected_session_tools = db
+                    .get_session_tool_breakdown(sel_id)
+                    .ok()
+                    .filter(|v| !v.is_empty());
             }
             self.selected_session_interaction_events = db
                 .list_interaction_events_for_session(sel_id, 10_000)
@@ -1101,9 +1105,7 @@ impl App {
                         self.selected_session_stats = None;
                     },
                     // Reset scope when Esc is pressed and a scope is active.
-                    KeyCode::Esc
-                        if self.scope_provider.is_some() || self.scope_model.is_some() =>
-                    {
+                    KeyCode::Esc if self.scope_provider.is_some() || self.scope_model.is_some() => {
                         self.scope_provider = None;
                         self.scope_model = None;
                     },
@@ -1340,7 +1342,10 @@ impl App {
     fn execute_palette_command(&mut self) {
         let q = self.command_palette_query.trim().to_lowercase();
         let items = Self::palette_items();
-        if let Some(item) = items.iter().find(|(label, _, _)| label.to_lowercase().contains(&q)) {
+        if let Some(item) = items
+            .iter()
+            .find(|(label, _, _)| label.to_lowercase().contains(&q))
+        {
             (item.1)(self);
         }
     }
@@ -1350,26 +1355,78 @@ impl App {
     #[allow(clippy::type_complexity)]
     pub fn palette_items() -> Vec<(&'static str, fn(&mut App), &'static str)> {
         vec![
-            ("1 Sessions", |a| { a.tab = Tab::Sessions; }, "Go to Sessions tab"),
-            ("2 Spend", |a| { a.tab = Tab::Spend; }, "Go to Spend tab"),
-            ("refresh", |a| {
-                a.last_refresh = Instant::now() - a.refresh_interval;
-                a.refresh_in_progress = true;
-            }, "Force data refresh"),
-            ("zen", |a| {
-                a.zen_mode = !a.zen_mode;
-                a.zen_auto_exited = false;
-            }, "Toggle zen mode"),
-            ("filter", |a| {
-                a.tab = Tab::Sessions;
-                a.sessions_filter_active = true;
-                a.sessions_filter.clear();
-            }, "Open session filter"),
-            ("copy stats", |a| a.copy_stats_to_clipboard(), "Copy stats to clipboard"),
-            ("theme cockpit", |a| { a.theme = Theme::Cockpit; }, "Switch to Cockpit theme"),
-            ("theme standard", |a| { a.theme = Theme::Standard; }, "Switch to Standard theme"),
-            ("theme contrast", |a| { a.theme = Theme::HighContrast; }, "Switch to High Contrast theme"),
-            ("help", |a| { a.show_help = true; }, "Show help overlay"),
+            (
+                "1 Sessions",
+                |a| {
+                    a.tab = Tab::Sessions;
+                },
+                "Go to Sessions tab",
+            ),
+            (
+                "2 Spend",
+                |a| {
+                    a.tab = Tab::Spend;
+                },
+                "Go to Spend tab",
+            ),
+            (
+                "refresh",
+                |a| {
+                    a.last_refresh = Instant::now() - a.refresh_interval;
+                    a.refresh_in_progress = true;
+                },
+                "Force data refresh",
+            ),
+            (
+                "zen",
+                |a| {
+                    a.zen_mode = !a.zen_mode;
+                    a.zen_auto_exited = false;
+                },
+                "Toggle zen mode",
+            ),
+            (
+                "filter",
+                |a| {
+                    a.tab = Tab::Sessions;
+                    a.sessions_filter_active = true;
+                    a.sessions_filter.clear();
+                },
+                "Open session filter",
+            ),
+            (
+                "copy stats",
+                |a| a.copy_stats_to_clipboard(),
+                "Copy stats to clipboard",
+            ),
+            (
+                "theme cockpit",
+                |a| {
+                    a.theme = Theme::Cockpit;
+                },
+                "Switch to Cockpit theme",
+            ),
+            (
+                "theme standard",
+                |a| {
+                    a.theme = Theme::Standard;
+                },
+                "Switch to Standard theme",
+            ),
+            (
+                "theme contrast",
+                |a| {
+                    a.theme = Theme::HighContrast;
+                },
+                "Switch to High Contrast theme",
+            ),
+            (
+                "help",
+                |a| {
+                    a.show_help = true;
+                },
+                "Show help overlay",
+            ),
         ]
     }
 
@@ -1460,8 +1517,7 @@ impl App {
             },
             // IS-5: Session list row click — select session; second click on same row = open detail.
             MouseEventKind::Down(MouseButton::Left)
-                if self.tab == Tab::Sessions
-                    && !self.session_detail_mode =>
+                if self.tab == Tab::Sessions && !self.session_detail_mode =>
             {
                 // Gate clicks to the left (session list) panel.
                 // When the terminal is wide enough for split-panel, right panel
@@ -1475,48 +1531,57 @@ impl App {
                 if column >= list_panel_w {
                     // Click landed in the detail preview panel — ignore for selection.
                 } else {
-                // Compute where the session list body starts:
-                //   row 0       = tab bar
-                //   row 1       = alert banner (0 or 1 line)
-                //   rows 2..N   = overview cards (7 lines when data exists and terminal is tall)
-                //   row N+1     = session list top border
-                //   row N+2     = first session content row
-                let banner_h = if self.alert_banner.is_some() { 1u16 } else { 0u16 };
-                let has_data = self.budget.daily_spent > 0.0 || self.global_stats.is_some();
-                // Derive scope_h and cards_h using the same logic as sessions::draw().
-                let scope_h = crate::views::sessions::compute_scope_h(self);
-                let content_h = self.terminal_height.saturating_sub(2 + banner_h);
-                let cards_h = if has_data && content_h >= 14 + scope_h { 7u16 } else { 0u16 };
-                let body_start = 1u16 + banner_h + cards_h + scope_h + 1u16;
-                if row >= body_start {
-                    let row_in_body = row - body_start;
-                    let row_h = 2u16; // each session row renders project + cost (2 lines)
-                    let visual_idx = (row_in_body / row_h) as usize;
-
-                    // Recompute the same scroll offset used by draw_session_list.
-                    let visible_height = self.terminal_height.saturating_sub(body_start + 2) as usize;
-                    let visible_height = visible_height.max(4);
-                    let scroll = if self.selected_session_idx >= visible_height {
-                        self.selected_session_idx - visible_height + 1
+                    // Compute where the session list body starts:
+                    //   row 0       = tab bar
+                    //   row 1       = alert banner (0 or 1 line)
+                    //   rows 2..N   = overview cards (7 lines when data exists and terminal is tall)
+                    //   row N+1     = session list top border
+                    //   row N+2     = first session content row
+                    let banner_h = if self.alert_banner.is_some() {
+                        1u16
                     } else {
-                        0
+                        0u16
                     };
-                    let new_idx = scroll + visual_idx;
-                    let sessions = self.filtered_sessions();
-                    if new_idx < sessions.len() {
-                        if self.mouse_last_click_row == Some(row)
-                            && self.selected_session_idx == new_idx
-                        {
-                            // Double-click same row → open detail
-                            self.session_detail_mode = true;
-                            self.turn_scroll_detail = 0;
-                            self.replay_turn_idx = None;
+                    let has_data = self.budget.daily_spent > 0.0 || self.global_stats.is_some();
+                    // Derive scope_h and cards_h using the same logic as sessions::draw().
+                    let scope_h = crate::views::sessions::compute_scope_h(self);
+                    let content_h = self.terminal_height.saturating_sub(2 + banner_h);
+                    let cards_h = if has_data && content_h >= 14 + scope_h {
+                        7u16
+                    } else {
+                        0u16
+                    };
+                    let body_start = 1u16 + banner_h + cards_h + scope_h + 1u16;
+                    if row >= body_start {
+                        let row_in_body = row - body_start;
+                        let row_h = 2u16; // each session row renders project + cost (2 lines)
+                        let visual_idx = (row_in_body / row_h) as usize;
+
+                        // Recompute the same scroll offset used by draw_session_list.
+                        let visible_height =
+                            self.terminal_height.saturating_sub(body_start + 2) as usize;
+                        let visible_height = visible_height.max(4);
+                        let scroll = if self.selected_session_idx >= visible_height {
+                            self.selected_session_idx - visible_height + 1
                         } else {
-                            self.select_session_abs(new_idx);
+                            0
+                        };
+                        let new_idx = scroll + visual_idx;
+                        let sessions = self.filtered_sessions();
+                        if new_idx < sessions.len() {
+                            if self.mouse_last_click_row == Some(row)
+                                && self.selected_session_idx == new_idx
+                            {
+                                // Double-click same row → open detail
+                                self.session_detail_mode = true;
+                                self.turn_scroll_detail = 0;
+                                self.replay_turn_idx = None;
+                            } else {
+                                self.select_session_abs(new_idx);
+                            }
+                            self.mouse_last_click_row = Some(row);
                         }
-                        self.mouse_last_click_row = Some(row);
                     }
-                }
                 } // end left-panel gate
             },
             // Scroll wheel — delegate to view-specific scroll
@@ -1559,10 +1624,8 @@ fn tab_at_x(x: u16, active: Tab) -> Option<Tab> {
     let badge_w = 12u16; // " ◈ Scopeon  "
     let sep_w = 3u16; // " ┃ "
 
-    let tabs: &[(&str, Tab, &str)] = &[
-        ("1", Tab::Sessions, "Sessions"),
-        ("2", Tab::Spend, "Spend"),
-    ];
+    let tabs: &[(&str, Tab, &str)] =
+        &[("1", Tab::Sessions, "Sessions"), ("2", Tab::Spend, "Spend")];
 
     let mut cur_x = badge_w;
     for (key, tab, label) in tabs {
@@ -1688,8 +1751,14 @@ fn detect_copilot_activity() -> bool {
 
 fn build_provider_status(
     provider_db_stats: &std::collections::HashMap<String, (i64, i64)>,
+    config: &UserConfig,
 ) -> Vec<ProviderStatus> {
     let home = dirs::home_dir();
+    let optimization_reports: std::collections::HashMap<_, _> =
+        list_provider_optimization_reports(config)
+            .into_iter()
+            .map(|report| (report.provider_id.clone(), report))
+            .collect();
 
     let check =
         |sub: &str| -> bool { home.as_ref().map(|h| h.join(sub).exists()).unwrap_or(false) };
@@ -1724,6 +1793,19 @@ fn build_provider_status(
             .map(|&(s, t)| (s as usize, t as usize))
             .unwrap_or((0, 0))
     };
+    let optimization_status = |id: &str| -> String {
+        optimization_reports
+            .get(id)
+            .map(|report| {
+                let preset = report
+                    .current_preset
+                    .as_deref()
+                    .map(|value| format!("preset {value}"))
+                    .unwrap_or_else(|| "preset not applied".to_string());
+                format!("Optimize: {} · {}", report.support.label(), preset)
+            })
+            .unwrap_or_else(|| "Optimize: observe only".to_string())
+    };
 
     let (claude_sessions, claude_turns) = db_stats("claude-code");
     let (copilot_sessions, copilot_turns) = db_stats("copilot-cli");
@@ -1741,6 +1823,7 @@ fn build_provider_status(
             turn_count: claude_turns,
             last_update: None,
             config_hint: "~/.claude/projects/  (auto-detected)".to_string(),
+            optimization_status: optimization_status("claude-code"),
         },
         ProviderStatus {
             id: "copilot-cli".to_string(),
@@ -1754,6 +1837,7 @@ fn build_provider_status(
             } else {
                 "Install GitHub Copilot CLI from github.com/github/gh-copilot".to_string()
             },
+            optimization_status: optimization_status("copilot-cli"),
         },
         ProviderStatus {
             id: "aider".to_string(),
@@ -1767,9 +1851,10 @@ fn build_provider_status(
             } else {
                 "Enable: run `aider --analytics` or set AIDER_ANALYTICS_LOG".to_string()
             },
+            optimization_status: optimization_status("aider"),
         },
         ProviderStatus {
-            id: "gemini".to_string(),
+            id: "gemini-cli".to_string(),
             name: "Gemini CLI".to_string(),
             is_active: gemini_available,
             session_count: gemini_sessions,
@@ -1780,6 +1865,7 @@ fn build_provider_status(
             } else {
                 "Install: npm install -g @google/generative-ai-cli".to_string()
             },
+            optimization_status: optimization_status("gemini-cli"),
         },
         ProviderStatus {
             id: "ollama".to_string(),
@@ -1789,6 +1875,7 @@ fn build_provider_status(
             turn_count: ollama_turns,
             last_update: None,
             config_hint: "~/Library/Application Support/Ollama/db.sqlite".to_string(),
+            optimization_status: optimization_status("ollama"),
         },
         ProviderStatus {
             id: "codex".to_string(),
@@ -1802,6 +1889,7 @@ fn build_provider_status(
             } else {
                 "Install: npm install -g @openai/codex".to_string()
             },
+            optimization_status: optimization_status("codex"),
         },
         ProviderStatus {
             id: "cursor".to_string(),
@@ -1815,6 +1903,7 @@ fn build_provider_status(
             } else {
                 "Install from: cursor.com".to_string()
             },
+            optimization_status: optimization_status("cursor"),
         },
         ProviderStatus {
             id: "windsurf".to_string(),
@@ -1828,6 +1917,7 @@ fn build_provider_status(
             } else {
                 "Install from: codeium.com/windsurf".to_string()
             },
+            optimization_status: optimization_status("windsurf"),
         },
         ProviderStatus {
             id: "continue".to_string(),
@@ -1841,6 +1931,7 @@ fn build_provider_status(
             } else {
                 "Install Continue extension in VS Code: continue.dev".to_string()
             },
+            optimization_status: optimization_status("continue"),
         },
     ]
 }

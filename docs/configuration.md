@@ -22,6 +22,11 @@ daily_usd   = 5.0                # 0.0 = no limit; TUI shows progress bar + aler
 weekly_usd  = 20.0
 monthly_usd = 50.0
 
+[optimizer.applied_presets]
+# auto-managed by `scopeon optimize apply`
+# claude-code = "balanced"
+# codex = "most-speed"
+
 [alerts]
 daily_cost_usd     = 5.0         # TUI banner when daily cost exceeds this
 cache_hit_rate_min = 0.20        # warn when cache hit rate drops below 20%
@@ -56,6 +61,15 @@ events = ["context_crisis"]
 | `SCOPEON_DB` | `~/.scopeon/scopeon.db` | Override the database path |
 | `SCOPEON_CONFIG` | `~/.scopeon/config.toml` | Override the config file path |
 | `RUST_LOG` | — | Set to `scopeon=debug` for verbose diagnostic logs |
+
+## Provider optimization artifacts
+
+`scopeon optimize apply` keeps its generated files under your Scopeon home:
+
+- `~/.scopeon/launchers/` — launch scripts for Claude Code, Copilot CLI, Codex, and Gemini CLI presets
+- `~/.scopeon/optimizer/` — Scopeon-managed provider override files such as Gemini preset JSON
+
+Persistent provider-owned config is only edited where the vendor documents a stable user-level format. In v1 that means Codex profiles in `~/.codex/config.toml`; Claude Code and Copilot CLI presets stay launcher-only.
 
 ## Resetting the database
 

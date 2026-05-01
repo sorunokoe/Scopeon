@@ -42,7 +42,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     let idx_main = if v_constraints.len() > 1 { 1 } else { 0 };
-    let idx_timeline = if v_constraints.len() == 3 { Some(2) } else { None };
+    let idx_timeline = if v_constraints.len() == 3 {
+        Some(2)
+    } else {
+        None
+    };
 
     if v_constraints.len() > 1 {
         draw_mission_hero(f, app, v[0]);
@@ -123,12 +127,8 @@ fn draw_mission_hero(f: &mut Frame, app: &App, area: Rect) {
         .and_then(|s| s.session.as_ref())
         .or_else(|| app.sessions_list.first());
 
-    let model_str = session
-        .map(|s| shorten_model(&s.model))
-        .unwrap_or_default();
-    let provider_str = session
-        .map(|s| s.provider.clone())
-        .unwrap_or_default();
+    let model_str = session.map(|s| shorten_model(&s.model)).unwrap_or_default();
+    let provider_str = session.map(|s| s.provider.clone()).unwrap_or_default();
     let project_str = session
         .map(|s| truncate_with_ellipsis(&s.project_name, 20))
         .unwrap_or_default();
@@ -152,15 +152,11 @@ fn draw_mission_hero(f: &mut Frame, app: &App, area: Rect) {
         let mut spans = vec![
             Span::styled(
                 format!(" {} ", live_icon),
-                Style::default()
-                    .fg(live_color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(live_color).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 live_label.to_string(),
-                Style::default()
-                    .fg(live_color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(live_color).add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
         ];
@@ -212,18 +208,16 @@ fn draw_mission_hero(f: &mut Frame, app: &App, area: Rect) {
     } else {
         // IDLE: show today summary
         let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let today_row = app.global_stats.as_ref().and_then(|g| {
-            g.daily.iter().find(|r| r.date == today_str)
-        });
+        let today_row = app
+            .global_stats
+            .as_ref()
+            .and_then(|g| g.daily.iter().find(|r| r.date == today_str));
         let today_cost = today_row.map(|r| r.estimated_cost_usd).unwrap_or(0.0);
         let today_sessions = today_row.map(|r| r.session_count).unwrap_or(0);
         let today_turns_count = today_row.map(|r| r.turn_count).unwrap_or(0);
 
         let mut spans = vec![
-            Span::styled(
-                format!(" {} ", live_icon),
-                Style::default().fg(live_color),
-            ),
+            Span::styled(format!(" {} ", live_icon), Style::default().fg(live_color)),
             Span::styled(live_label.to_string(), Style::default().fg(live_color)),
             Span::raw("  "),
         ];
@@ -310,9 +304,7 @@ fn build_ctx_cache_line(app: &App) -> Line<'static> {
         ),
         Span::styled(
             urgency.to_string(),
-            Style::default()
-                .fg(ctx_color)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ctx_color).add_modifier(Modifier::BOLD),
         ),
         Span::styled("    Cache ", Style::default().fg(t.muted_color())),
         Span::styled(cache_bar, Style::default().fg(cache_color)),
@@ -338,9 +330,10 @@ fn draw_today_activity_col(f: &mut Frame, app: &App, area: Rect) {
     let t = &app.theme;
     let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    let today_row = app.global_stats.as_ref().and_then(|g| {
-        g.daily.iter().find(|r| r.date == today_str)
-    });
+    let today_row = app
+        .global_stats
+        .as_ref()
+        .and_then(|g| g.daily.iter().find(|r| r.date == today_str));
 
     let today_cost = today_row.map(|r| r.estimated_cost_usd).unwrap_or(0.0);
     let today_turns = today_row.map(|r| r.turn_count).unwrap_or(0);
@@ -413,7 +406,11 @@ fn draw_today_activity_col(f: &mut Frame, app: &App, area: Rect) {
         let trend_str = if app.trend_cost_pct.abs() > 2.0 {
             format!(
                 "{}{:.0}% vs yday",
-                if app.trend_cost_pct > 0.0 { "↑" } else { "↓" },
+                if app.trend_cost_pct > 0.0 {
+                    "↑"
+                } else {
+                    "↓"
+                },
                 app.trend_cost_pct.abs()
             )
         } else {
@@ -495,10 +492,7 @@ fn draw_today_activity_col(f: &mut Frame, app: &App, area: Rect) {
             };
 
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {} ", icon),
-                    Style::default().fg(icon_color),
-                ),
+                Span::styled(format!("  {} ", icon), Style::default().fg(icon_color)),
                 Span::styled(
                     project_display,
                     Style::default()
@@ -624,22 +618,15 @@ fn draw_spend_by_source_col(f: &mut Frame, app: &App, area: Rect) {
                 0.0
             };
             let model_filled = (model_pct / 100.0 * bar_w as f64) as usize;
-            let model_bar =
-                "█".repeat(model_filled) + &"░".repeat(bar_w - model_filled);
+            let model_bar = "█".repeat(model_filled) + &"░".repeat(bar_w - model_filled);
             let model_short = shorten_model(model);
             let model_display = truncate_with_ellipsis(&model_short, 13);
 
             lines.push(Line::from(vec![
                 Span::styled("    ▸ ", Style::default().fg(t.muted_color())),
-                Span::styled(
-                    model_display,
-                    Style::default().fg(t.text_secondary()),
-                ),
+                Span::styled(model_display, Style::default().fg(t.text_secondary())),
                 Span::styled("  ", Style::default()),
-                Span::styled(
-                    model_bar,
-                    Style::default().fg(t.cost_color()),
-                ),
+                Span::styled(model_bar, Style::default().fg(t.cost_color())),
                 Span::styled(
                     format!(" ${:.2}", model_cost),
                     Style::default().fg(t.muted_color()),
@@ -714,10 +701,7 @@ fn draw_recommendations_col(f: &mut Frame, app: &App, area: Rect) {
     if lines.len() < max_rows {
         lines.push(Line::from(vec![
             Span::styled("  Cache ", Style::default().fg(t.muted_color())),
-            Span::styled(
-                cache_bar,
-                Style::default().fg(t.cache_color(cache_pct)),
-            ),
+            Span::styled(cache_bar, Style::default().fg(t.cache_color(cache_pct))),
             Span::styled(
                 format!(" {:.0}%", cache_pct),
                 Style::default().fg(t.cache_color(cache_pct)),
@@ -749,10 +733,7 @@ fn draw_recommendations_col(f: &mut Frame, app: &App, area: Rect) {
         if lines.len() < max_rows {
             lines.push(Line::from(vec![
                 Span::styled("    → ", Style::default().fg(t.muted_color())),
-                Span::styled(
-                    "run /compact",
-                    Style::default().fg(t.accent_color()),
-                ),
+                Span::styled("run /compact", Style::default().fg(t.accent_color())),
             ]));
         }
     }
@@ -775,14 +756,8 @@ fn draw_recommendations_col(f: &mut Frame, app: &App, area: Rect) {
         if lines.len() < max_rows {
             let title_display = truncate_with_ellipsis(s.title, body_w.saturating_sub(4));
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {} ", icon),
-                    Style::default().fg(col),
-                ),
-                Span::styled(
-                    title_display,
-                    Style::default().fg(t.text_primary()),
-                ),
+                Span::styled(format!("  {} ", icon), Style::default().fg(col)),
+                Span::styled(title_display, Style::default().fg(t.text_primary())),
             ]));
         }
         // Short body preview (first 10 words)
@@ -796,10 +771,7 @@ fn draw_recommendations_col(f: &mut Frame, app: &App, area: Rect) {
             let short_body = truncate_with_ellipsis(&short_body, body_w.saturating_sub(4));
             lines.push(Line::from(vec![
                 Span::raw("    "),
-                Span::styled(
-                    short_body,
-                    Style::default().fg(t.text_secondary()),
-                ),
+                Span::styled(short_body, Style::default().fg(t.text_secondary())),
             ]));
         }
         // Action hint
@@ -807,10 +779,7 @@ fn draw_recommendations_col(f: &mut Frame, app: &App, area: Rect) {
             if lines.len() < max_rows {
                 lines.push(Line::from(vec![
                     Span::styled("    → ", Style::default().fg(t.muted_color())),
-                    Span::styled(
-                        cmd.to_string(),
-                        Style::default().fg(t.accent_color()),
-                    ),
+                    Span::styled(cmd.to_string(), Style::default().fg(t.accent_color())),
                 ]));
             }
         }
@@ -847,13 +816,9 @@ fn draw_recommendations_col(f: &mut Frame, app: &App, area: Rect) {
 
 fn action_hint_for_id(id: &str) -> Option<&'static str> {
     match id {
-        "cache-warmup" | "compaction-freq" | "cold-cache" | "below-avg-cache" => {
-            Some("/compact")
-        }
+        "cache-warmup" | "compaction-freq" | "cold-cache" | "below-avg-cache" => Some("/compact"),
         "thinking-ratio" => Some("disable extended thinking"),
-        "redundant-tools" | "high-mcp" | "heavy-mcp-server" => {
-            Some("reduce MCP tools")
-        }
+        "redundant-tools" | "high-mcp" | "heavy-mcp-server" => Some("reduce MCP tools"),
         "task-fanout" | "task-prompt-bloat" => Some("use smaller focused tasks"),
         "high-cost-per-turn" | "above-avg-input" => Some("check context window size"),
         "skill-opportunity" | "conversation-phase" => Some("review in History tab"),
@@ -927,17 +892,11 @@ fn draw_turn_timeline(f: &mut Frame, app: &App, area: Rect) {
     let lines = vec![
         Line::from(vec![
             Span::styled("  ", Style::default()),
-            Span::styled(
-                bar_row,
-                Style::default().fg(app.theme.success_color()),
-            ),
+            Span::styled(bar_row, Style::default().fg(app.theme.success_color())),
         ]),
         Line::from(vec![
             Span::styled("  ", Style::default()),
-            Span::styled(
-                idx_row,
-                Style::default().fg(app.theme.muted_color()),
-            ),
+            Span::styled(idx_row, Style::default().fg(app.theme.muted_color())),
         ]),
     ];
 

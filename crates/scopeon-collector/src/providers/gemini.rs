@@ -90,7 +90,7 @@ struct TokensSummary {
 
 impl Provider for GeminiCLIProvider {
     fn id(&self) -> &str {
-        "gemini"
+        "gemini-cli"
     }
     fn name(&self) -> &str {
         "Gemini CLI"

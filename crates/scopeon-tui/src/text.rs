@@ -81,7 +81,11 @@ mod tests {
     fn ellipsis_far_over_limit_result_is_exactly_limit_chars() {
         let long_str = "a".repeat(100);
         let result = truncate_with_ellipsis(&long_str, 20);
-        assert_eq!(result.chars().count(), 20, "result must be exactly max_chars wide");
+        assert_eq!(
+            result.chars().count(),
+            20,
+            "result must be exactly max_chars wide"
+        );
         assert!(result.ends_with('…'));
     }
 
@@ -116,7 +120,10 @@ mod tests {
     fn ellipsis_result_never_empty_for_nonempty_input_when_limit_positive() {
         for limit in 1..=5 {
             let result = truncate_with_ellipsis("something long enough", limit);
-            assert!(!result.is_empty(), "limit={limit} must not produce empty string");
+            assert!(
+                !result.is_empty(),
+                "limit={limit} must not produce empty string"
+            );
             assert_eq!(result.chars().count(), limit);
         }
     }

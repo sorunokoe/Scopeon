@@ -12,8 +12,9 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWrit
 use tracing::{debug, info};
 
 use scopeon_core::{
-    derive_hook_effects, interaction_token_total, provider_capabilities, redact_webhook_url,
-    Database, UserConfig,
+    derive_hook_effects, interaction_token_total, list_provider_optimization_reports,
+    preview_provider_preset, provider_capabilities, redact_webhook_url, Database,
+    OptimizationPresetId, OptimizationProviderId, UserConfig,
 };
 use scopeon_metrics::{compute_suggestions, MetricContext, WasteReport};
 
@@ -617,6 +618,29 @@ fn tool_list() -> Value {
                 "name": "get_optimization_suggestions",
                 "description": "Get actionable suggestions to reduce token usage and cost. Analyzes the current session for waste patterns (repeated context, over-use of tools, etc.).",
                 "inputSchema": { "type": "object", "properties": {}, "required": [] }
+            },
+            {
+                "name": "list_provider_optimizations",
+                "description": "List Scopeon's supported provider optimization modes, safety notes, current applied presets, and official docs for Claude Code, Copilot CLI, Codex, and Gemini CLI.",
+                "inputSchema": { "type": "object", "properties": {}, "required": [] }
+            },
+            {
+                "name": "preview_provider_preset",
+                "description": "Preview the launcher/config artifacts Scopeon would generate for a provider preset without mutating any files.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {
+                            "type": "string",
+                            "description": "Provider id: claude-code, copilot-cli, codex, or gemini-cli."
+                        },
+                        "preset": {
+                            "type": "string",
+                            "description": "Preset id: most-savings, balanced, most-speed, or most-power."
+                        }
+                    },
+                    "required": ["provider", "preset"]
+                }
             },
             {
                 "name": "get_interaction_history",
@@ -1379,6 +1403,26 @@ fn handle_get_optimization_suggestions(db: &Database) -> Value {
     })
 }
 
+fn handle_list_provider_optimizations(config: &UserConfig) -> Value {
+    json!({
+        "providers": list_provider_optimization_reports(config)
+    })
+}
+
+fn handle_preview_provider_preset(config: &UserConfig, provider: &str, preset: &str) -> Value {
+    let Some(provider_id) = OptimizationProviderId::from_alias(provider) else {
+        return json!({"error": format!("Unknown provider '{}'", provider)});
+    };
+    let Some(preset_id) = OptimizationPresetId::from_alias(preset) else {
+        return json!({"error": format!("Unknown preset '{}'", preset)});
+    };
+
+    match preview_provider_preset(provider_id, preset_id, config) {
+        Ok(preview) => json!(preview),
+        Err(err) => json!({"error": err.to_string()}),
+    }
+}
+
 fn handle_suggest_compact(db: &Database) -> Value {
     let sid = match db.get_latest_session_id() {
         Ok(Some(id)) => id,
@@ -1808,6 +1852,12 @@ fn dispatch(
                     db,
                     |db| live_query(db, handle_get_optimization_suggestions),
                 ),
+                "list_provider_optimizations" => handle_list_provider_optimizations(config),
+                "preview_provider_preset" => {
+                    let provider = args.get("provider").and_then(Value::as_str).unwrap_or("");
+                    let preset = args.get("preset").and_then(Value::as_str).unwrap_or("");
+                    handle_preview_provider_preset(config, provider, preset)
+                },
                 "get_provider_capabilities" => {
                     let sid = args.get("session_id").and_then(Value::as_str);
                     if sid.is_none() {

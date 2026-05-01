@@ -1,9 +1,9 @@
 /// Tab 6: Multi-agent subagent tree
 use ratatui::{
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    layout::{Constraint, Direction, Layout, Rect},
     Frame,
 };
 use scopeon_core::AgentNode;
@@ -101,7 +101,13 @@ fn draw_tree(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn render_node<'a>(node: &'a AgentNode, prefix: &str, is_last: bool, theme: Theme, lines: &mut Vec<Line<'a>>) {
+fn render_node<'a>(
+    node: &'a AgentNode,
+    prefix: &str,
+    is_last: bool,
+    theme: Theme,
+    lines: &mut Vec<Line<'a>>,
+) {
     let connector = if is_last { "└─ " } else { "├─ " };
     let cost_color = if node.total_cost_usd > 0.10 {
         theme.error_color()

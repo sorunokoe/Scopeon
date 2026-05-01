@@ -29,10 +29,11 @@ pub struct CodexProvider {
 
 impl CodexProvider {
     pub fn new() -> Self {
-        // Honour CODEX_CONFIG_DIR env var, then fall back to ~/.codex
-        let dir = std::env::var("CODEX_CONFIG_DIR")
+        // Honour official CODEX_HOME first, then legacy CODEX_CONFIG_DIR.
+        let dir = std::env::var("CODEX_HOME")
             .ok()
             .map(PathBuf::from)
+            .or_else(|| std::env::var("CODEX_CONFIG_DIR").ok().map(PathBuf::from))
             .or_else(|| dirs::home_dir().map(|h| h.join(".codex")))
             .unwrap_or_else(|| PathBuf::from("/nonexistent"))
             .join("sessions");
@@ -56,8 +57,9 @@ impl Provider for CodexProvider {
     }
 
     fn description(&self) -> &str {
-        "OpenAI Codex CLI. Reads JSONL sessions from $CODEX_CONFIG_DIR/sessions/ \
-         (or ~/.codex/sessions/). Captures turns with full token breakdown and tool calls."
+        "OpenAI Codex CLI. Reads JSONL sessions from $CODEX_HOME/sessions/ \
+         (or legacy $CODEX_CONFIG_DIR/sessions/, or ~/.codex/sessions/). \
+         Captures turns with full token breakdown and tool calls."
     }
 
     fn is_available(&self) -> bool {
@@ -788,13 +790,27 @@ mod tests {
     }
 
     #[test]
-    fn test_env_var_override() {
+    fn test_codex_home_override() {
         let _guard = {
             // Serialize env-mutating tests to avoid races.
             static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
             LOCK.lock().unwrap()
         };
         let custom = std::env::temp_dir().join("scopeon_test_codex");
+        std::env::set_var("CODEX_HOME", custom.to_str().unwrap());
+        let provider = CodexProvider::new();
+        assert_eq!(provider.sessions_dir, custom.join("sessions"));
+        std::env::remove_var("CODEX_HOME");
+    }
+
+    #[test]
+    fn test_legacy_codex_config_dir_override() {
+        let _guard = {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            LOCK.lock().unwrap()
+        };
+        let custom = std::env::temp_dir().join("scopeon_test_codex_legacy");
+        std::env::remove_var("CODEX_HOME");
         std::env::set_var("CODEX_CONFIG_DIR", custom.to_str().unwrap());
         let provider = CodexProvider::new();
         assert_eq!(provider.sessions_dir, custom.join("sessions"));

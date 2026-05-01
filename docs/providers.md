@@ -1,17 +1,18 @@
 # Supported Providers
 
 Scopeon discovers log files automatically — no configuration needed for standard install paths.
+Run `scopeon optimize scan` to inspect which providers support Scopeon-managed optimization presets.
 
-| Provider | Log location | Notes |
-|---|---|---|
-| **OpenAI Codex CLI** | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | Full token breakdown per turn; override path with `CODEX_CONFIG_DIR` |
-| **Claude Code** | `~/.claude/projects/**/*.jsonl` | Full token breakdown; MCP identity exact, task history estimated |
-| **GitHub Copilot CLI** | `~/.copilot/session-state/` | Rich provenance: tasks, subagents, skills, hooks, MCP/tool lifecycle, model changes |
-| **Aider** | `~/.aider/analytics.jsonl` | Analytics log; override with `AIDER_ANALYTICS_LOG` |
-| **Cursor** | Cursor app + `Cursor/User/globalStorage` | Detection only for now; no token telemetry yet |
-| **Gemini CLI** | `~/.gemini/tmp/*/session-*.jsonl` | Reads Gemini CLI tmp session files |
-| **Ollama** | Local API polling | Free — no cost tracking |
-| **Generic OpenAI** | Configurable paths | Set `generic_paths` in `~/.scopeon/config.toml` |
+| Provider | Log location | Optimization | Notes |
+|---|---|---|---|
+| **OpenAI Codex CLI** | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | Config + launcher | Full token breakdown per turn; prefers `CODEX_HOME`, falls back to legacy `CODEX_CONFIG_DIR` |
+| **Claude Code** | `~/.claude/projects/**/*.jsonl` | Launcher presets | Full token breakdown; MCP identity exact, task history estimated |
+| **GitHub Copilot CLI** | `~/.copilot/session-state/` | Launcher presets | Rich provenance: tasks, subagents, skills, hooks, MCP/tool lifecycle, model changes; config root honors `COPILOT_HOME` |
+| **Aider** | `~/.aider/analytics.jsonl` | Observe only | Analytics log; override with `AIDER_ANALYTICS_LOG` |
+| **Cursor** | Cursor app + `Cursor/User/globalStorage` | Observe only | Detection only for now; no token telemetry yet |
+| **Gemini CLI** | `~/.gemini/tmp/*/session-*.jsonl` | Config + launcher | Reads Gemini CLI tmp session files and can generate settings override presets |
+| **Ollama** | Local API polling | Observe only | Free — no cost tracking |
+| **Generic OpenAI** | Configurable paths | Observe only | Set `generic_paths` in `~/.scopeon/config.toml` |
 
 ## Adding a new provider
 

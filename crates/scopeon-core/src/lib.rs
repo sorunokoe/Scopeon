@@ -22,6 +22,7 @@ pub mod context;
 pub mod cost;
 pub mod db;
 pub mod models;
+pub mod optimization;
 pub mod provenance;
 pub mod tags;
 pub mod user_config;
@@ -35,12 +36,17 @@ pub use cost::{
 pub use db::{Database, COMPACTION_MIN_PREV_TOKENS};
 pub use models::{
     fnv1a_64, AgentNode, DailyRollup, GlobalStats, InteractionEvent, ProjectStats,
-    ProviderCapability, Session, SessionAnomaly, SessionStats, SessionSummary, TaskRun, ToolBreakdownItem, ToolCall,
-    ToolStat, Turn,
+    ProviderCapability, Session, SessionAnomaly, SessionStats, SessionSummary, TaskRun,
+    ToolBreakdownItem, ToolCall, ToolStat, Turn,
+};
+pub use optimization::{
+    apply_provider_preset, list_provider_optimization_reports, preview_provider_preset,
+    ApplyReport, FileArtifactPreview, OptimizationPreset, OptimizationPresetId,
+    OptimizationProviderId, OptimizationSupport, PresetPreview, ProviderOptimizationReport,
 };
 pub use provenance::{derive_hook_effects, interaction_token_total, provider_capabilities};
 pub use tags::{branch_to_tag, infer_tag_from_tool_calls};
 pub use user_config::{
-    redact_webhook_url, ModelPricingOverride, PricingConfig, StorageConfig, UserConfig,
-    WebhookConfig,
+    redact_webhook_url, ModelPricingOverride, OptimizerConfig, PricingConfig, StorageConfig,
+    UserConfig, WebhookConfig,
 };

@@ -17,6 +17,7 @@ mod digest;
 mod doctor;
 mod git_hook;
 mod onboarding;
+mod optimize;
 mod serve;
 mod shell_hook;
 mod team;
@@ -142,6 +143,11 @@ enum Commands {
     ///
     ///   scopeon onboard
     Onboard,
+    /// Inspect, preview, and apply provider optimization presets.
+    Optimize {
+        #[command(subcommand)]
+        action: optimize::OptimizeAction,
+    },
     /// Print a weekly digest report summarising your AI usage and top optimizations.
     ///
     /// Outputs a Markdown-formatted report covering the last N days (default 7) of
@@ -335,7 +341,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let config = Config::load()?;
-    let user_config = UserConfig::load();
+    let mut user_config = UserConfig::load();
     let db = Arc::new(Mutex::new(Database::open(&config.db_path)?));
 
     // Auto-reprice stored turns with user-defined pricing overrides on startup.
@@ -590,6 +596,9 @@ async fn main() -> Result<()> {
         },
         Commands::Onboard => {
             onboarding::cmd_onboard()?;
+        },
+        Commands::Optimize { action } => {
+            optimize::cmd_optimize(action, &mut user_config)?;
         },
         Commands::Digest {
             days,
