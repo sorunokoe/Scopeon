@@ -102,7 +102,7 @@
 
 **Config** — interactive AI provider optimization with detailed preset explanations
 
-<!-- TODO: Add Config tab screenshot -->
+![Config](assets/config-tab.png)
 
 **GitHub Copilot CLI MCP** — Scopeon tools and live context/spend stats inside Copilot CLI
 
