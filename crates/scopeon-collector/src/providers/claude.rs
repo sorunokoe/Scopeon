@@ -79,6 +79,30 @@ impl Provider for ClaudeCodeProvider {
     }
 }
 
+pub(crate) fn walkdir_jsonl(dir: &std::path::Path) -> Vec<PathBuf> {
+    walkdir_jsonl_inner(dir, 0)
+}
+
+fn walkdir_jsonl_inner(dir: &std::path::Path, depth: u32) -> Vec<PathBuf> {
+    const MAX_DEPTH: u32 = 8;
+    if depth >= MAX_DEPTH || !dir.is_dir() {
+        return vec![];
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
+    let mut out = vec![];
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+            out.push(path);
+        } else if path.is_dir() {
+            out.extend(walkdir_jsonl_inner(&path, depth + 1));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,31 +134,4 @@ mod tests {
             "Expected path ending in .claude/projects, got: {path_str}"
         );
     }
-}
-
-pub(crate) fn walkdir_jsonl(dir: &std::path::Path) -> Vec<PathBuf> {
-    walkdir_jsonl_inner(dir, 0)
-}
-
-fn walkdir_jsonl_inner(dir: &std::path::Path, depth: u32) -> Vec<PathBuf> {
-    const MAX_DEPTH: u32 = 8;
-    let mut results = Vec::new();
-    if depth >= MAX_DEPTH {
-        return results;
-    }
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let Ok(ft) = entry.file_type() else { continue };
-            if ft.is_symlink() {
-                continue;
-            }
-            let path = entry.path();
-            if ft.is_dir() {
-                results.extend(walkdir_jsonl_inner(&path, depth + 1));
-            } else if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-                results.push(path);
-            }
-        }
-    }
-    results
 }

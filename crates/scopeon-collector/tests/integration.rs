@@ -5,12 +5,12 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use scopeon_collector::watcher::process_file;
 use scopeon_core::Database;
 
-fn write_jsonl(dir: &PathBuf, filename: &str, lines: &[&str]) {
+fn write_jsonl(dir: &Path, filename: &str, lines: &[&str]) {
     let path = dir.join(filename);
     let mut file = fs::File::create(&path).unwrap();
     for line in lines {

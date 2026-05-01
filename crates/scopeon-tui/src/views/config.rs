@@ -212,6 +212,7 @@ fn render_preset_selector(frame: &mut Frame, app: &App, area: Rect, theme: &Them
     frame.render_widget(list, chunks[0]);
 
     // Right: Selected preset details with wrapping
+    #[allow(clippy::vec_init_then_push)]
     if let Some(preset) = presets.get(app.config_preset_selected_idx) {
         let mut lines = Vec::new();
 
@@ -251,15 +252,15 @@ fn render_preset_selector(frame: &mut Frame, app: &App, area: Rect, theme: &Them
         let cmd_words: Vec<&str> = preset.command_preview.split_whitespace().collect();
         let mut current_line = String::new();
         for word in cmd_words {
-            if current_line.len() + word.len() + 1 > (chunks[1].width as usize - 4) {
-                if !current_line.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        current_line.clone(),
-                        Style::default().fg(Color::Cyan),
-                    )));
-                    current_line.clear();
-                    current_line.push_str("  ");
-                }
+            if current_line.len() + word.len() + 1 > (chunks[1].width as usize - 4)
+                && !current_line.is_empty()
+            {
+                lines.push(Line::from(Span::styled(
+                    current_line.clone(),
+                    Style::default().fg(Color::Cyan),
+                )));
+                current_line.clear();
+                current_line.push_str("  ");
             }
             if !current_line.is_empty() {
                 current_line.push(' ');
@@ -326,6 +327,7 @@ fn render_preset_selector(frame: &mut Frame, app: &App, area: Rect, theme: &Them
     }
 }
 
+#[allow(dead_code)]
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)

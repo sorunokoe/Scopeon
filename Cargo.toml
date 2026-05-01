@@ -61,7 +61,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 tokio-stream = "0.1"
 
 [workspace.package]
-version = "0.10.0"
+version = "0.10.1"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Scopeon Contributors"]

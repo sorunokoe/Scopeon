@@ -5,6 +5,16 @@ All notable changes to Scopeon will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-05-01
+
+### Fixed
+- **Copilot CLI Token Extraction**: Accurate token metrics in session details
+  - Extract thinking tokens from `reasoningText` field (now showing for 22% of turns)
+  - Extract input tokens from `user.message` events
+  - Remove hardcoded 500 output token minimum (now showing actual values 126-8192)
+  - Prefer accurate `context_tokens` over estimated `input_tokens` in fallback logic
+  - Cost calculations improved by ~7% accuracy ($521 → $484 for historical data)
+
 ## [0.10.0] - 2026-05-01
 
 ### Added

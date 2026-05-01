@@ -2,6 +2,7 @@ use super::*;
 use metric::{MetricContext, MetricValue};
 use scopeon_core::Turn;
 
+#[allow(clippy::too_many_arguments)]
 fn make_turn(
     id: &str,
     input: i64,
@@ -414,7 +415,7 @@ fn test_health_score_empty_session_returns_neutral() {
     let score = compute_health_score(&empty_ctx, &waste);
     // cache=15 (neutral), context=25 (no data), cost=15 (neutral), waste=20 (no signals)
     assert!(
-        score >= 50.0 && score <= 80.0,
+        (50.0..=80.0).contains(&score),
         "empty session health should be in neutral range, got {}",
         score
     );

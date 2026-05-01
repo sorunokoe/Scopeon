@@ -120,6 +120,7 @@ impl CopilotCliProvider {
         let mut turn_tool_counts: HashMap<String, i64> = HashMap::new();
         let mut session_token_limit: Option<i64> = None;
         let mut current_model = "copilot-claude-sonnet".to_string();
+        let mut pending_user_input_tokens: i64 = 0;
 
         let mut tool_starts: HashMap<String, ToolExecutionStart> = HashMap::new();
         let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
@@ -187,6 +188,19 @@ impl CopilotCliProvider {
                     });
                 },
 
+                "user.message" => {
+                    // Extract input tokens from user message content (estimate: ~4 chars per token)
+                    let input_tokens = evt
+                        .data
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .map(|s| (s.len() as i64) / 4)
+                        .unwrap_or(0);
+                    
+                    // Store for the next turn that starts
+                    pending_user_input_tokens = input_tokens;
+                },
+
                 "assistant.turn_start" => {
                     let turn_id = evt
                         .data
@@ -207,6 +221,10 @@ impl CopilotCliProvider {
                             context_tokens: 0,
                             token_limit: session_token_limit.unwrap_or(200_000),
                             output_tokens: 0,
+                            thinking_tokens: 0,
+                            input_tokens: pending_user_input_tokens,
+                            cache_read_tokens: 0,
+                            cache_write_tokens: 0,
                             model: Some(current_model.clone()),
                             compaction_input: 0,
                             compaction_output: 0,
@@ -214,6 +232,7 @@ impl CopilotCliProvider {
                             is_compaction: false,
                         },
                     );
+                    pending_user_input_tokens = 0; // Reset after applying
                 },
 
                 "assistant.message" => {
@@ -222,9 +241,19 @@ impl CopilotCliProvider {
                         .get("outputTokens")
                         .and_then(Value::as_i64)
                         .unwrap_or(0);
+                    
+                    // Extract thinking tokens from reasoningText length (estimate: ~4 chars per token)
+                    let thinking_tokens = evt
+                        .data
+                        .get("reasoningText")
+                        .and_then(Value::as_str)
+                        .map(|s| (s.len() as i64) / 4)
+                        .unwrap_or(0);
+                    
                     if let Some(tid) = &active_turn_id {
                         if let Some(turn) = pending_turns.get_mut(tid) {
                             turn.output_tokens = turn.output_tokens.max(output_tokens);
+                            turn.thinking_tokens = turn.thinking_tokens.max(thinking_tokens);
                             if let Some(model) = evt
                                 .data
                                 .get("model")
@@ -1171,6 +1200,10 @@ impl CopilotCliProvider {
                                 context_tokens: input,
                                 token_limit: session_token_limit.unwrap_or(200_000),
                                 output_tokens: output,
+                                thinking_tokens: 0,
+                                input_tokens: input,
+                                cache_read_tokens: cached,
+                                cache_write_tokens: 0,
                                 model: Some(current_model.clone()),
                                 compaction_input: input,
                                 compaction_output: output,
@@ -1272,15 +1305,24 @@ impl CopilotCliProvider {
             } else {
                 None
             };
-            let (input_tokens, cache_read, cache_write, output_tokens) = if t.is_compaction {
+            let (input_tokens, cache_read, cache_write, output_tokens, thinking_tokens) = if t.is_compaction {
                 (
                     t.compaction_input,
                     t.compaction_cached,
                     0,
                     t.compaction_output,
+                    0,
                 )
             } else {
-                (t.context_tokens, 0, 0, t.output_tokens.max(500))
+                // Prefer accurate context_tokens from truncation events over estimated input_tokens
+                let input = if t.context_tokens > 0 { t.context_tokens } else { t.input_tokens };
+                (
+                    input,
+                    t.cache_read_tokens,
+                    t.cache_write_tokens,
+                    t.output_tokens,
+                    t.thinking_tokens,
+                )
             };
             let turn_id = format!("{}-turn-{}", sess.id, idx);
             raw_turn_to_db_id.insert(t.id.clone(), turn_id.clone());
@@ -1307,7 +1349,7 @@ impl CopilotCliProvider {
                 cache_write_5m_tokens: 0,
                 cache_write_1h_tokens: 0,
                 output_tokens,
-                thinking_tokens: 0,
+                thinking_tokens,
                 mcp_call_count: tool_count,
                 mcp_input_token_est: 0,
                 text_output_tokens: output_tokens,
@@ -1381,6 +1423,10 @@ struct PendingTurn {
     context_tokens: i64,
     token_limit: i64,
     output_tokens: i64,
+    thinking_tokens: i64,
+    input_tokens: i64,
+    cache_read_tokens: i64,
+    cache_write_tokens: i64,
     model: Option<String>,
     compaction_input: i64,
     compaction_output: i64,

@@ -1176,20 +1176,6 @@ impl App {
                 self.needs_redraw = true;
                 return;
             },
-            KeyCode::BackTab => {
-                let prev = if self.tab.index() == 0 {
-                    Tab::count() - 1
-                } else {
-                    self.tab.index() - 1
-                };
-                self.tab = Tab::from_index(prev);
-                // Invalidate Config cache when entering that tab
-                if self.tab == Tab::Config {
-                    self.config_providers.clear();
-                }
-                self.needs_redraw = true;
-                return;
-            },
             _ => {},
         }
 
