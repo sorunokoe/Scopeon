@@ -2113,10 +2113,8 @@ fn draw_tools_compact(f: &mut Frame, app: &App, tools: &[ToolBreakdownItem], are
                     ));
                 }
             },
-            "tool" => {
-                if tool_parts.len() < 5 {
-                    tool_parts.push(format!("{}({})", item.name, item.count));
-                }
+            "tool" if tool_parts.len() < 5 => {
+                tool_parts.push(format!("{}({})", item.name, item.count));
             },
             "hook" => hook_count += item.count,
             "skill" => skill_count += item.count,
