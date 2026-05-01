@@ -1226,15 +1226,13 @@ impl App {
                         .unwrap_or(0);
 
                     match key {
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if self.config_preset_selected_idx > 0 {
-                                self.config_preset_selected_idx -= 1;
-                            }
+                        KeyCode::Up | KeyCode::Char('k') if self.config_preset_selected_idx > 0 => {
+                            self.config_preset_selected_idx -= 1;
                         },
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if self.config_preset_selected_idx < max_preset_idx {
-                                self.config_preset_selected_idx += 1;
-                            }
+                        KeyCode::Down | KeyCode::Char('j')
+                            if self.config_preset_selected_idx < max_preset_idx =>
+                        {
+                            self.config_preset_selected_idx += 1;
                         },
                         KeyCode::Enter => {
                             // Apply the selected preset
@@ -1335,7 +1333,10 @@ impl App {
             Ok(_) => {
                 // Save the updated config to disk so the preset persists
                 if let Err(e) = self.config.save() {
-                    self.toast = Some((format!("Applied but failed to save config: {}", e), Instant::now()));
+                    self.toast = Some((
+                        format!("Applied but failed to save config: {}", e),
+                        Instant::now(),
+                    ));
                 } else {
                     self.toast = Some((
                         format!(

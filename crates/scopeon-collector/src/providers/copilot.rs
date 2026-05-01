@@ -196,7 +196,7 @@ impl CopilotCliProvider {
                         .and_then(Value::as_str)
                         .map(|s| (s.len() as i64) / 4)
                         .unwrap_or(0);
-                    
+
                     // Store for the next turn that starts
                     pending_user_input_tokens = input_tokens;
                 },
@@ -241,7 +241,7 @@ impl CopilotCliProvider {
                         .get("outputTokens")
                         .and_then(Value::as_i64)
                         .unwrap_or(0);
-                    
+
                     // Extract thinking tokens from reasoningText length (estimate: ~4 chars per token)
                     let thinking_tokens = evt
                         .data
@@ -249,7 +249,7 @@ impl CopilotCliProvider {
                         .and_then(Value::as_str)
                         .map(|s| (s.len() as i64) / 4)
                         .unwrap_or(0);
-                    
+
                     if let Some(tid) = &active_turn_id {
                         if let Some(turn) = pending_turns.get_mut(tid) {
                             turn.output_tokens = turn.output_tokens.max(output_tokens);
@@ -1305,25 +1305,30 @@ impl CopilotCliProvider {
             } else {
                 None
             };
-            let (input_tokens, cache_read, cache_write, output_tokens, thinking_tokens) = if t.is_compaction {
-                (
-                    t.compaction_input,
-                    t.compaction_cached,
-                    0,
-                    t.compaction_output,
-                    0,
-                )
-            } else {
-                // Prefer accurate context_tokens from truncation events over estimated input_tokens
-                let input = if t.context_tokens > 0 { t.context_tokens } else { t.input_tokens };
-                (
-                    input,
-                    t.cache_read_tokens,
-                    t.cache_write_tokens,
-                    t.output_tokens,
-                    t.thinking_tokens,
-                )
-            };
+            let (input_tokens, cache_read, cache_write, output_tokens, thinking_tokens) =
+                if t.is_compaction {
+                    (
+                        t.compaction_input,
+                        t.compaction_cached,
+                        0,
+                        t.compaction_output,
+                        0,
+                    )
+                } else {
+                    // Prefer accurate context_tokens from truncation events over estimated input_tokens
+                    let input = if t.context_tokens > 0 {
+                        t.context_tokens
+                    } else {
+                        t.input_tokens
+                    };
+                    (
+                        input,
+                        t.cache_read_tokens,
+                        t.cache_write_tokens,
+                        t.output_tokens,
+                        t.thinking_tokens,
+                    )
+                };
             let turn_id = format!("{}-turn-{}", sess.id, idx);
             raw_turn_to_db_id.insert(t.id.clone(), turn_id.clone());
 
