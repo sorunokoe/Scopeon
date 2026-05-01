@@ -412,6 +412,34 @@ impl App {
     }
 
     pub fn refresh(&mut self, db: &Database) {
+        // ── Tab-specific refresh optimization ────────────────────────────────────
+        // Only load data needed for the currently active tab to avoid lag.
+        match self.tab {
+            Tab::Config => {
+                // Config tab only needs provider optimization reports
+                if self.config_providers.is_empty() {
+                    let reports = list_provider_optimization_reports(&self.config);
+                    self.config_providers = reports
+                        .into_iter()
+                        .map(|r| ConfigProvider {
+                            id: r.provider_id.clone(),
+                            display_name: r.provider_name.clone(),
+                            detected: r.detected,
+                            support: r.support.label().to_string(),
+                            current_preset: r.current_preset.clone(),
+                        })
+                        .collect();
+                }
+                // Skip all other heavy DB queries - not needed for Config tab
+                self.last_refresh = Instant::now();
+                self.refresh_in_progress = false;
+                return;
+            },
+            _ => {
+                // Sessions and Spend tabs need full data refresh
+            },
+        }
+
         // ── Live session (staleness-aware) ────────────────────────────────────
         const LIVE_THRESHOLD_MS: i64 = 15 * 60 * 1_000; // 15 minutes
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -865,21 +893,6 @@ impl App {
             if std::fs::write(&tmp, &status_line).is_ok() {
                 let _ = std::fs::rename(&tmp, &status_path);
             }
-        }
-
-        // ── Load config providers for Config tab ─────────────────────────────────
-        if self.config_providers.is_empty() {
-            let reports = list_provider_optimization_reports(&self.config);
-            self.config_providers = reports
-                .into_iter()
-                .map(|r| ConfigProvider {
-                    id: r.provider_id.clone(),
-                    display_name: r.provider_name.clone(),
-                    detected: r.detected,
-                    support: r.support.label().to_string(),
-                    current_preset: r.current_preset.clone(),
-                })
-                .collect();
         }
     }
 
