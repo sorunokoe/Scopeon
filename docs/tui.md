@@ -1,24 +1,25 @@
 # TUI Dashboard
 
-Six keyboard-navigable tabs — press a number to jump directly.
+Seven keyboard-navigable tabs — press a number to jump directly.
 
 | Tab | Key | What you see |
 |---|---|---|
 | **Dashboard** | `1` | Narrative health header · active session · token breakdown · cache gauge · context bar |
 | **Sessions** | `2` | Session list with git-branch tags · filter predicates · per-turn drill-down · temporal replay |
-| **Insights** | `3` | Severity-bordered anomaly cards · cross-session suggestions · trend chart |
-| **Budget** | `4` | Daily/weekly/monthly spend vs. limits · EOD projection · adaptive threshold bands |
-| **Providers** | `5` | Status · session count · last-seen per provider |
-| **Agents** | `6` | Multi-agent tree with depth indentation · per-agent cost and token totals |
+| **Config** | `3` | AI provider optimization presets · interactive configuration · detailed preset explanations |
+| **Insights** | `4` | Severity-bordered anomaly cards · cross-session suggestions · trend chart |
+| **Budget** | `5` | Daily/weekly/monthly spend vs. limits · EOD projection · adaptive threshold bands |
+| **Providers** | `6` | Status · session count · last-seen per provider |
+| **Agents** | `7` | Multi-agent tree with depth indentation · per-agent cost and token totals |
 
 ## Keyboard shortcuts
 
 | Key | Action |
 |---|---|
-| `1` – `6` / `Tab` | Switch tab |
+| `1` – `7` / `Tab` | Switch tab |
 | `↑` / `k` | Scroll up |
 | `↓` / `j` | Scroll down |
-| `Enter` | Open session detail / fullscreen |
+| `Enter` | Open session detail / fullscreen (Sessions) · Open preset selector (Config) |
 | `→` / `l` | Replay: step forward one turn |
 | `←` / `h` | Replay: step backward (first `←` exits replay) |
 | `/` | Open session filter bar |
@@ -26,6 +27,48 @@ Six keyboard-navigable tabs — press a number to jump directly.
 | `r` | Force refresh |
 | `?` | Help overlay |
 | `q` | Quit |
+
+## Config Tab — AI Provider Optimization
+
+The Config tab provides an interactive interface for managing AI provider optimization presets. 
+
+**What you see:**
+- Left panel: List of detected AI providers (Claude Code, Copilot CLI, Codex, Gemini CLI)
+- Provider detection status (✓ detected / ✗ not installed)
+- Current optimization preset for each provider
+- Right panel: Instructions and preset selector modal
+
+**How to use:**
+1. Press `3` or Tab to navigate to Config tab
+2. Use `↑`/`↓` to select a provider
+3. Press `Enter` to open the preset selector (only works for detected providers)
+4. Browse presets with `↑`/`↓`:
+   - **Most Savings** — Minimize cost (aggressive caching, cheaper models)
+   - **Balanced** — Good cost/performance mix (recommended default)
+   - **Most Speed** — Fastest responses (reduce latency)
+   - **Most Power** — Best quality (premium models, full features)
+5. Press `Enter` to apply the selected preset
+6. Press `Esc` to cancel
+
+**Preset details shown:**
+- Summary — What this preset does
+- Trade-off — Cost vs performance implications
+- Command preview — Actual CLI flags (intelligently wrapped)
+- Optimizations list — Bulleted explanation of all changes
+
+**What happens when you apply:**
+- Launcher scripts created in `~/.scopeon/launchers/`
+- Config modifications applied (for supported providers)
+- Toast notification confirms success
+- Provider list updates to show new preset
+
+For more control, use the CLI:
+```bash
+scopeon optimize scan                           # see all providers
+scopeon optimize explain --provider claude-code # detailed explanations
+scopeon optimize preview --provider <id> --preset <mode>
+scopeon optimize apply --provider <id> --preset <mode>
+```
 
 ## Session filter predicates
 

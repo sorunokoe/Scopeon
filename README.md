@@ -100,6 +100,10 @@
 
 ![Spend](assets/spend-tab.png)
 
+**Config** — interactive AI provider optimization with detailed preset explanations
+
+<!-- TODO: Add Config tab screenshot -->
+
 **GitHub Copilot CLI MCP** — Scopeon tools and live context/spend stats inside Copilot CLI
 
 ![GitHub Copilot CLI MCP](assets/mcp-copilot.png)
