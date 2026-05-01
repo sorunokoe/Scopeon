@@ -5,10 +5,12 @@
    ╚═╗║  ║ ║╠═╝║╣ ║ ║║║║
    ╚═╝╚═╝╚═╝╩  ╚═╝╚═╝╝╚╝
    AI Context Observability
-   for Claude Code & friends
+   & Optimization for
+   Claude Code, Copilot CLI,
+   Codex, Gemini CLI
 </pre>
 
-**The AI context observatory — for every coding agent, every token, every dollar.**
+**The AI context observatory — for every coding agent, every token, every dollar. With one-click optimization presets.**
 
 <img src="assets/sessions-tab.png" alt="Scopeon Sessions" width="900" />
 
@@ -23,9 +25,9 @@
 
 ---
 
-*You fire up Claude Code and start building. An hour later: **"Context window full."** You have no idea what burned it — was it the MCP tools? The thinking budget? Yesterday's file edits? You're flying blind on a meter that costs real money.*
+*You fire up Claude Code and start building. An hour later: **"Context window full."** You have no idea what burned it — was it the MCP tools? The thinking budget? Yesterday's file edits? You're flying blind on a meter that costs real money. And your AI provider runs with default settings that may cost 10x more than needed.*
 
-**Scopeon gives you the instrument panel.**
+**Scopeon gives you the instrument panel — and the optimization controls.**
 
 ---
 
@@ -41,6 +43,7 @@
 | "Is my context pressure growing over time?" | Context/Activity timeline sparkline per turn in session detail |
 | "How does cost trend week over week?" | 14-day trend chart toggled with `t` — cost · sessions · cache rate |
 | "Did my optimization actually help?" | `compare_sessions` before/after diff |
+| "Which AI provider preset saves me the most?" | Interactive Config tab — apply most-savings/balanced/most-speed/most-power |
 | "Can I gate AI cost in CI?" | `scopeon ci report --fail-on-cost-delta 50` |
 | "How is my whole team using AI?" | `scopeon team` — per-author cost from git history, no server needed |
 | "Can teammates see my live metrics?" | `scopeon serve` — privacy-filtered API + SSE stream for IDEs |
@@ -56,7 +59,9 @@
 
 ⚡ **Prompt cache that *actually* tells you if it's working** — hit-rate gauge, dollars saved vs. uncached baseline. Know in seconds whether your cache setup is doing anything.
 
-🛠️ **Provider optimizer** — inspect official Claude Code, Copilot CLI, Codex, and Gemini efficiency controls, preview Scopeon-managed launchers/config artifacts, and apply presets like `most-savings`, `balanced`, `most-speed`, and `most-power`.
+🎯 **One-click AI provider optimization** — Interactive TUI Config tab for Claude Code, Copilot CLI, Codex, Gemini CLI. Apply `most-savings` for max efficiency, `balanced` for everyday use, `most-speed` for fast iteration, or `most-power` for complex tasks. See exactly what changes before you apply. All presets persist and work instantly.
+
+🛠️ **CLI optimization commands** — `scopeon optimize scan` detects installed providers, `explain` shows current settings, `preview` shows what will change, `apply` switches presets. Zero manual config editing.
 
 ⏳ **"You have ~12 turns left"** — Scopeon tracks context fill rate over time and tells you how many turns remain before the wall. Stop being blindsided mid-task.
 
