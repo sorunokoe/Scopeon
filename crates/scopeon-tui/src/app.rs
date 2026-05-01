@@ -1312,13 +1312,18 @@ impl App {
 
         match apply_provider_preset(provider_id, preset_id, &mut self.config) {
             Ok(_) => {
-                self.toast = Some((
-                    format!(
-                        "Applied {} preset to {}",
-                        preset.title, provider.display_name
-                    ),
-                    Instant::now(),
-                ));
+                // Save the updated config to disk so the preset persists
+                if let Err(e) = self.config.save() {
+                    self.toast = Some((format!("Applied but failed to save config: {}", e), Instant::now()));
+                } else {
+                    self.toast = Some((
+                        format!(
+                            "Applied {} preset to {}",
+                            preset.title, provider.display_name
+                        ),
+                        Instant::now(),
+                    ));
+                }
                 // Reload providers to show updated preset
                 self.config_providers.clear();
             },
