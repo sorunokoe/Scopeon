@@ -1247,17 +1247,17 @@ impl App {
                 } else {
                     // Provider list navigation
                     match key {
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if !self.config_providers.is_empty() && self.config_selected_idx > 0 {
-                                self.config_selected_idx -= 1;
-                            }
+                        KeyCode::Up | KeyCode::Char('k')
+                            if !self.config_providers.is_empty()
+                                && self.config_selected_idx > 0 =>
+                        {
+                            self.config_selected_idx -= 1;
                         },
-                        KeyCode::Down | KeyCode::Char('j') => {
+                        KeyCode::Down | KeyCode::Char('j')
                             if self.config_selected_idx
-                                < self.config_providers.len().saturating_sub(1)
-                            {
-                                self.config_selected_idx += 1;
-                            }
+                                < self.config_providers.len().saturating_sub(1) =>
+                        {
+                            self.config_selected_idx += 1;
                         },
                         KeyCode::Enter => {
                             // Open preset selector if provider is detected
