@@ -319,6 +319,17 @@ pub struct ConfigProvider {
     pub detected: bool,
     pub support: String,
     pub current_preset: Option<String>,
+    pub presets: Vec<ConfigPreset>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigPreset {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    pub tradeoff: String,
+    pub command_preview: String,
+    pub optimizations: Vec<String>,
 }
 
 impl Default for App {
@@ -427,6 +438,18 @@ impl App {
                             detected: r.detected,
                             support: r.support.label().to_string(),
                             current_preset: r.current_preset.clone(),
+                            presets: r
+                                .presets
+                                .into_iter()
+                                .map(|p| ConfigPreset {
+                                    id: p.id,
+                                    title: p.title,
+                                    summary: p.summary,
+                                    tradeoff: p.tradeoff,
+                                    command_preview: p.command_preview,
+                                    optimizations: p.optimizations,
+                                })
+                                .collect(),
                         })
                         .collect();
                 }
@@ -1175,6 +1198,12 @@ impl App {
             Tab::Config => {
                 if self.config_preset_selector_active {
                     // Inside preset selector modal
+                    let max_preset_idx = self
+                        .config_providers
+                        .get(self.config_selected_idx)
+                        .map(|p| p.presets.len().saturating_sub(1))
+                        .unwrap_or(0);
+
                     match key {
                         KeyCode::Up | KeyCode::Char('k') => {
                             if self.config_preset_selected_idx > 0 {
@@ -1182,7 +1211,7 @@ impl App {
                             }
                         },
                         KeyCode::Down | KeyCode::Char('j') => {
-                            if self.config_preset_selected_idx < 3 {
+                            if self.config_preset_selected_idx < max_preset_idx {
                                 self.config_preset_selected_idx += 1;
                             }
                         },
@@ -1260,13 +1289,17 @@ impl App {
             None => return,
         };
 
-        let preset_names = ["most-savings", "balanced", "most-speed", "most-power"];
-        let preset_id = match preset_names.get(self.config_preset_selected_idx) {
-            Some(name) => match OptimizationPresetId::from_alias(name) {
-                Some(id) => id,
-                None => return,
-            },
+        let preset = match provider.presets.get(self.config_preset_selected_idx) {
+            Some(p) => p,
             None => return,
+        };
+
+        let preset_id = match OptimizationPresetId::from_alias(&preset.id) {
+            Some(id) => id,
+            None => {
+                self.toast = Some((format!("Unknown preset: {}", preset.id), Instant::now()));
+                return;
+            },
         };
 
         let provider_id = match OptimizationProviderId::from_alias(&provider.id) {
@@ -1282,8 +1315,7 @@ impl App {
                 self.toast = Some((
                     format!(
                         "Applied {} preset to {}",
-                        preset_id.title(),
-                        provider.display_name
+                        preset.title, provider.display_name
                     ),
                     Instant::now(),
                 ));

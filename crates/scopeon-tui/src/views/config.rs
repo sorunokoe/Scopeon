@@ -1,36 +1,13 @@
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
 use crate::app::App;
 use crate::theme::Theme;
-
-const PRESETS: &[(&str, &str, &str)] = &[
-    (
-        "most-savings",
-        "Most Savings",
-        "Minimize cost (aggressive caching, cheaper models)",
-    ),
-    (
-        "balanced",
-        "Balanced",
-        "Good cost/performance mix (recommended default)",
-    ),
-    (
-        "most-speed",
-        "Most Speed",
-        "Fastest responses (reduce latency)",
-    ),
-    (
-        "most-power",
-        "Most Power",
-        "Best quality (premium models, full features)",
-    ),
-];
 
 pub fn render_config(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
     // Split into left (provider list) and right (instructions/preset selector)
@@ -187,22 +164,25 @@ fn render_instructions(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) 
 }
 
 fn render_preset_selector(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
-    // Center the selector dialog
-    let dialog_area = centered_rect(60, 80, area);
+    // Split into selector (left) and details (right)
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
 
-    // Clear background
-    frame.render_widget(Clear, dialog_area);
+    // Get provider and its presets
+    let provider = app.config_providers.get(app.config_selected_idx);
+    let provider_name = provider.map(|p| p.display_name.as_str()).unwrap_or("None");
+    let presets = provider
+        .map(|p| &p.presets)
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
 
-    let provider = app
-        .config_providers
-        .get(app.config_selected_idx)
-        .map(|p| p.display_name.as_str())
-        .unwrap_or("None");
-
-    let items: Vec<ListItem> = PRESETS
+    // Left: Preset list
+    let items: Vec<ListItem> = presets
         .iter()
         .enumerate()
-        .map(|(idx, (_, name, desc))| {
+        .map(|(idx, preset)| {
             let is_selected = idx == app.config_preset_selected_idx;
             let style = if is_selected {
                 Style::default()
@@ -215,9 +195,7 @@ fn render_preset_selector(frame: &mut Frame, app: &App, area: Rect, theme: &Them
 
             let line = Line::from(vec![
                 Span::styled(if is_selected { " ▶ " } else { "   " }, style),
-                Span::styled(*name, style),
-                Span::raw(" - "),
-                Span::styled(*desc, Style::default().fg(Color::Gray)),
+                Span::styled(&preset.title, style),
             ]);
 
             ListItem::new(line)
@@ -227,21 +205,112 @@ fn render_preset_selector(frame: &mut Frame, app: &App, area: Rect, theme: &Them
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Select Preset for {} ", provider))
+            .title(format!(" {} Presets ", provider_name))
             .border_style(Style::default().fg(Color::Cyan)),
     );
 
-    frame.render_widget(list, dialog_area);
+    frame.render_widget(list, chunks[0]);
+
+    // Right: Selected preset details with wrapping
+    if let Some(preset) = presets.get(app.config_preset_selected_idx) {
+        let mut lines = Vec::new();
+
+        // Title
+        lines.push(Line::from(Span::styled(
+            &preset.title,
+            Style::default()
+                .fg(theme.accent_color())
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+
+        // Summary
+        lines.push(Line::from(Span::styled(
+            &preset.summary,
+            Style::default().fg(theme.text_primary()),
+        )));
+        lines.push(Line::from(""));
+
+        // Trade-off
+        lines.push(Line::from(Span::styled(
+            "Trade-off:",
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(Span::styled(
+            &preset.tradeoff,
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(""));
+
+        // Command preview
+        lines.push(Line::from(Span::styled(
+            "Command:",
+            Style::default().fg(Color::Green),
+        )));
+        // Wrap long commands
+        let cmd_words: Vec<&str> = preset.command_preview.split_whitespace().collect();
+        let mut current_line = String::new();
+        for word in cmd_words {
+            if current_line.len() + word.len() + 1 > (chunks[1].width as usize - 4) {
+                if !current_line.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        current_line.clone(),
+                        Style::default().fg(Color::Cyan),
+                    )));
+                    current_line.clear();
+                    current_line.push_str("  ");
+                }
+            }
+            if !current_line.is_empty() {
+                current_line.push(' ');
+            }
+            current_line.push_str(word);
+        }
+        if !current_line.is_empty() {
+            lines.push(Line::from(Span::styled(
+                current_line,
+                Style::default().fg(Color::Cyan),
+            )));
+        }
+        lines.push(Line::from(""));
+
+        // Optimizations
+        if !preset.optimizations.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "What it does:",
+                Style::default().fg(Color::Magenta),
+            )));
+            for opt in &preset.optimizations {
+                lines.push(Line::from(Span::styled(
+                    format!("• {}", opt),
+                    Style::default().fg(Color::Gray),
+                )));
+            }
+        }
+
+        let text = Text::from(lines);
+        let para = Paragraph::new(text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Details ")
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .wrap(Wrap { trim: false })
+            .scroll((0, 0));
+
+        frame.render_widget(para, chunks[1]);
+    }
 
     // Show help at bottom
     let help_area = Rect {
-        x: dialog_area.x,
-        y: dialog_area.y + dialog_area.height,
-        width: dialog_area.width,
+        x: area.x,
+        y: area.y + area.height.saturating_sub(1),
+        width: area.width,
         height: 1,
     };
 
-    if help_area.y < area.height {
+    if help_area.y < frame.area().height {
         let help = Paragraph::new(Line::from(vec![
             Span::styled("↑/↓", Style::default().fg(Color::Green)),
             Span::raw(" Select  "),
