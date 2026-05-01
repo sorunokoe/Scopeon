@@ -1100,7 +1100,8 @@ impl App {
                 return;
             },
             KeyCode::Char('3') => {
-                // 3 is no longer a tab — ignore
+                self.tab = Tab::Config;
+                self.pane_focus = PaneFocus::Left;
                 return;
             },
             // Tab key: cycle to next tab

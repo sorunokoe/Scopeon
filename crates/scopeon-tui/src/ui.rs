@@ -549,9 +549,17 @@ fn draw_tab_bar(f: &mut Frame, app: &App, area: Rect, sc: SizeClass) {
 
     // Compact mode: very short labels to fit 55-79 col terminals.
     let tab_labels: &[(&str, Tab, &str)] = if sc == SizeClass::Compact {
-        &[("1", Tab::Sessions, "Sess"), ("2", Tab::Spend, "Spnd")]
+        &[
+            ("1", Tab::Sessions, "Sess"),
+            ("2", Tab::Spend, "Spnd"),
+            ("3", Tab::Config, "Conf"),
+        ]
     } else {
-        &[("1", Tab::Sessions, "Sessions"), ("2", Tab::Spend, "Spend")]
+        &[
+            ("1", Tab::Sessions, "Sessions"),
+            ("2", Tab::Spend, "Spend"),
+            ("3", Tab::Config, "Config"),
+        ]
     };
 
     let mut spans: Vec<Span> = vec![logo_badge(app.theme)];
