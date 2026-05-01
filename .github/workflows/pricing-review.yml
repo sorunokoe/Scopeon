@@ -7,6 +7,9 @@ on:
     - cron: '0 9 1 * *'
   workflow_dispatch: {}   # Allow manual trigger for testing
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   pricing-tests:
     name: Verify pricing invariants
