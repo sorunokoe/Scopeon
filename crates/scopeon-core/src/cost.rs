@@ -22,7 +22,7 @@
 ///
 /// Update this whenever `PRICING` is updated so the TUI staleness warning
 /// resets. Format: `"YYYY-MM-DD"`.
-pub const PRICING_VERIFIED_DATE: &str = "2026-04-27";
+pub const PRICING_VERIFIED_DATE: &str = "2026-06-02";
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -63,8 +63,15 @@ static FALLBACK_PRICING: ModelPricing = ModelPricing {
 static PRICING: &[ModelPricing] = &[
     // ── Anthropic Claude ────────────────────────────────────────────────────
     // Specific sub-version entries must come before broader prefix entries.
-    // Opus 4.5 / 4.6 are priced differently ($5/$25) from Opus 4 / 4.1 ($15/$75).
-    // Opus 4.7 is the new flagship at the $5/MTok tier (same as 4.5, 4.6).
+    // Opus 4.5 – 4.8 are priced differently ($5/$25) from Opus 4 / 4.1 ($15/$75).
+    // Opus 4.5 – 4.8 are priced at the $5/MTok tier; 4.8 is the latest flagship.
+    ModelPricing {
+        model_prefix: "claude-opus-4-8",
+        input_per_mtok: 5.00,
+        output_per_mtok: 25.00,
+        cache_write_per_mtok: 6.25,
+        cache_read_per_mtok: 0.50,
+    },
     ModelPricing {
         model_prefix: "claude-opus-4-7",
         input_per_mtok: 5.00,
@@ -142,6 +149,20 @@ static PRICING: &[ModelPricing] = &[
     // More-specific prefixes MUST come before the less-specific ones that
     // they start with (e.g. "gpt-5.4-mini" before "gpt-5.4").
     ModelPricing {
+        model_prefix: "gpt-5.5",
+        input_per_mtok: 5.00,
+        output_per_mtok: 30.00,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.50,
+    },
+    ModelPricing {
+        model_prefix: "gpt-5.4-nano",
+        input_per_mtok: 0.20,
+        output_per_mtok: 1.25,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.02,
+    },
+    ModelPricing {
         model_prefix: "gpt-5.4-mini",
         input_per_mtok: 0.75,
         output_per_mtok: 4.50,
@@ -150,10 +171,10 @@ static PRICING: &[ModelPricing] = &[
     },
     ModelPricing {
         model_prefix: "gpt-5.3-codex",
-        input_per_mtok: 2.50,
-        output_per_mtok: 15.00,
+        input_per_mtok: 1.75,
+        output_per_mtok: 14.00,
         cache_write_per_mtok: 0.00,
-        cache_read_per_mtok: 0.25,
+        cache_read_per_mtok: 0.175,
     },
     ModelPricing {
         model_prefix: "gpt-5.4",
@@ -294,10 +315,17 @@ static PRICING: &[ModelPricing] = &[
         cache_read_per_mtok: 7.50,
     },
     // ── Google Gemini ────────────────────────────────────────────────────────
-    // Gemini 3 series (all currently preview). Pricing uses the standard ≤200k token tier.
+    // Pricing uses the standard ≤200k token tier.
     // More-specific prefixes must precede broader ones (e.g. gemini-3.1-flash-lite before
     // gemini-3.1-pro, since "gemini-3.1-flash-lite" does not start with "gemini-3.1-pro"
     // and vice-versa — but both would be shadowed by a bare "gemini-3.1" entry).
+    ModelPricing {
+        model_prefix: "gemini-3.5-flash",
+        input_per_mtok: 1.50,
+        output_per_mtok: 9.00,
+        cache_write_per_mtok: 1.50,
+        cache_read_per_mtok: 0.15,
+    },
     ModelPricing {
         model_prefix: "gemini-3.1-flash-lite",
         input_per_mtok: 0.25,
@@ -1137,6 +1165,108 @@ mod tests {
             calculate_turn_cost("gemini-3.1-flash-lite-preview", 0, 0, 1_000_000, 1_000_000);
         assert!((cost_cache.cache_write_usd - 1.00).abs() < EPSILON);
         assert!((cost_cache.cache_read_usd - 0.025).abs() < EPSILON);
+    }
+
+    // ── 2026-06-02 new model tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_opus_48_pricing() {
+        // claude-opus-4-8 → $5/MTok input, $25/MTok output (same tier as 4.5–4.7)
+        let cost = calculate_turn_cost("claude-opus-4-8-20260520", 1_000_000, 0, 0, 0);
+        assert!(
+            (cost.input_usd - 5.0).abs() < EPSILON,
+            "Opus 4.8 input should be $5/MTok, got ${:.2}",
+            cost.input_usd
+        );
+        let cost_out = calculate_turn_cost("claude-opus-4-8-20260520", 0, 1_000_000, 0, 0);
+        assert!((cost_out.output_usd - 25.0).abs() < EPSILON);
+        // Cache: write $6.25, read $0.50
+        let cost_cache =
+            calculate_turn_cost("claude-opus-4-8-20260520", 0, 0, 1_000_000, 1_000_000);
+        assert!((cost_cache.cache_write_usd - 6.25).abs() < EPSILON);
+        assert!((cost_cache.cache_read_usd - 0.50).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_opus48_not_matched_by_opus4_original() {
+        // Ensures Opus 4.8 does NOT fall through to the $15 Opus 4 rate.
+        let cost_48 = calculate_turn_cost("claude-opus-4-8-20260520", 1_000_000, 0, 0, 0);
+        let cost_4 = calculate_turn_cost("claude-opus-4-20250514", 1_000_000, 0, 0, 0);
+        assert!(
+            cost_48.input_usd < cost_4.input_usd,
+            "Opus 4.8 ($5) must be cheaper than Opus 4 ($15)"
+        );
+    }
+
+    #[test]
+    fn test_gpt55_pricing() {
+        // gpt-5.5 → $5/MTok input, $30/MTok output
+        let cost = calculate_turn_cost("gpt-5.5", 1_000_000, 0, 0, 0);
+        assert!(
+            (cost.input_usd - 5.0).abs() < EPSILON,
+            "gpt-5.5 input should be $5/MTok, got ${:.4}",
+            cost.input_usd
+        );
+        let cost_out = calculate_turn_cost("gpt-5.5", 0, 1_000_000, 0, 0);
+        assert!((cost_out.output_usd - 30.0).abs() < EPSILON);
+        // Cache read: $0.50/MTok
+        let cost_cache = calculate_turn_cost("gpt-5.5", 0, 0, 0, 1_000_000);
+        assert!((cost_cache.cache_read_usd - 0.50).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_gpt54_nano_pricing() {
+        // gpt-5.4-nano → $0.20/MTok input, $1.25/MTok output
+        let cost = calculate_turn_cost("gpt-5.4-nano", 1_000_000, 0, 0, 0);
+        assert!(
+            (cost.input_usd - 0.20).abs() < EPSILON,
+            "gpt-5.4-nano input should be $0.20/MTok, got ${:.4}",
+            cost.input_usd
+        );
+        let cost_out = calculate_turn_cost("gpt-5.4-nano", 0, 1_000_000, 0, 0);
+        assert!((cost_out.output_usd - 1.25).abs() < EPSILON);
+        // Cache read: $0.02/MTok
+        let cost_cache = calculate_turn_cost("gpt-5.4-nano", 0, 0, 0, 1_000_000);
+        assert!((cost_cache.cache_read_usd - 0.02).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_gpt54_nano_not_shadowed_by_gpt54() {
+        // gpt-5.4-nano must match its specific entry, NOT gpt-5.4
+        let pnano = get_pricing("gpt-5.4-nano");
+        let p54 = get_pricing("gpt-5.4");
+        assert_eq!(pnano.model_prefix, "gpt-5.4-nano");
+        assert_eq!(p54.model_prefix, "gpt-5.4");
+        assert!(pnano.input_per_mtok < p54.input_per_mtok);
+    }
+
+    #[test]
+    fn test_gpt53_codex_updated_pricing() {
+        // gpt-5.3-codex pricing updated to $1.75/$14 (was $2.50/$15)
+        let cost = calculate_turn_cost("gpt-5.3-codex", 1_000_000, 0, 0, 0);
+        assert!(
+            (cost.input_usd - 1.75).abs() < EPSILON,
+            "gpt-5.3-codex input should be $1.75/MTok, got ${:.4}",
+            cost.input_usd
+        );
+        let cost_out = calculate_turn_cost("gpt-5.3-codex", 0, 1_000_000, 0, 0);
+        assert!((cost_out.output_usd - 14.0).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_gemini_35_flash_pricing() {
+        // gemini-3.5-flash → $1.50/MTok input, $9/MTok output
+        let cost = calculate_turn_cost("gemini-3.5-flash", 1_000_000, 0, 0, 0);
+        assert!(
+            (cost.input_usd - 1.50).abs() < EPSILON,
+            "gemini-3.5-flash input should be $1.50/MTok, got ${:.4}",
+            cost.input_usd
+        );
+        let cost_out = calculate_turn_cost("gemini-3.5-flash", 0, 1_000_000, 0, 0);
+        assert!((cost_out.output_usd - 9.0).abs() < EPSILON);
+        let cost_cache = calculate_turn_cost("gemini-3.5-flash", 0, 0, 1_000_000, 1_000_000);
+        assert!((cost_cache.cache_write_usd - 1.50).abs() < EPSILON);
+        assert!((cost_cache.cache_read_usd - 0.15).abs() < EPSILON);
     }
 
     // ── cache_hit_rate correctness ────────────────────────────────────────────
