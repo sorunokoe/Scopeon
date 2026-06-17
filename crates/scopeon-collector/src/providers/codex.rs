@@ -789,13 +789,14 @@ mod tests {
         assert_eq!(result.turns[0].output_tokens, 80);
     }
 
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap()
+    }
+
     #[test]
     fn test_codex_home_override() {
-        let _guard = {
-            // Serialize env-mutating tests to avoid races.
-            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-            LOCK.lock().unwrap()
-        };
+        let _guard = env_lock();
         let custom = std::env::temp_dir().join("scopeon_test_codex");
         std::env::set_var("CODEX_HOME", custom.to_str().unwrap());
         let provider = CodexProvider::new();
@@ -805,10 +806,7 @@ mod tests {
 
     #[test]
     fn test_legacy_codex_config_dir_override() {
-        let _guard = {
-            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-            LOCK.lock().unwrap()
-        };
+        let _guard = env_lock();
         let custom = std::env::temp_dir().join("scopeon_test_codex_legacy");
         std::env::remove_var("CODEX_HOME");
         std::env::set_var("CODEX_CONFIG_DIR", custom.to_str().unwrap());
