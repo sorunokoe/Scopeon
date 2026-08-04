@@ -22,7 +22,7 @@
 ///
 /// Update this whenever `PRICING` is updated so the TUI staleness warning
 /// resets. Format: `"YYYY-MM-DD"`.
-pub const PRICING_VERIFIED_DATE: &str = "2026-04-27";
+pub const PRICING_VERIFIED_DATE: &str = "2026-08-04";
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -63,6 +63,23 @@ static FALLBACK_PRICING: ModelPricing = ModelPricing {
 static PRICING: &[ModelPricing] = &[
     // ── Anthropic Claude ────────────────────────────────────────────────────
     // Specific sub-version entries must come before broader prefix entries.
+    // Opus 5 is the latest flagship at $5/$25.
+    ModelPricing {
+        model_prefix: "claude-opus-5",
+        input_per_mtok: 5.00,
+        output_per_mtok: 25.00,
+        cache_write_per_mtok: 6.25,
+        cache_read_per_mtok: 0.50,
+    },
+    // Sonnet 5 promotional pricing ($2/$10) through 2026-08-31; reverts to $3/$15.
+    // Using the promotional rate as it is current.
+    ModelPricing {
+        model_prefix: "claude-sonnet-5",
+        input_per_mtok: 2.00,
+        output_per_mtok: 10.00,
+        cache_write_per_mtok: 2.50,
+        cache_read_per_mtok: 0.20,
+    },
     // Opus 4.5 / 4.6 are priced differently ($5/$25) from Opus 4 / 4.1 ($15/$75).
     // Opus 4.7 is the new flagship at the $5/MTok tier (same as 4.5, 4.6).
     ModelPricing {
@@ -138,9 +155,46 @@ static PRICING: &[ModelPricing] = &[
         cache_read_per_mtok: 1.50,
     },
     // ── OpenAI GPT ───────────────────────────────────────────────────────────
-    // GPT-5 series (Codex CLI uses gpt-5.4-mini).
+    // GPT-5.6 series (released July 2026).
+    ModelPricing {
+        model_prefix: "gpt-5.6-sol",
+        input_per_mtok: 5.00,
+        output_per_mtok: 30.00,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.50,
+    },
+    ModelPricing {
+        model_prefix: "gpt-5.6-terra",
+        input_per_mtok: 2.00,
+        output_per_mtok: 12.00,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.20,
+    },
+    ModelPricing {
+        model_prefix: "gpt-5.6-luna",
+        input_per_mtok: 0.20,
+        output_per_mtok: 1.20,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.02,
+    },
+    // GPT-5.5 series.
+    ModelPricing {
+        model_prefix: "gpt-5.5",
+        input_per_mtok: 5.00,
+        output_per_mtok: 30.00,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.50,
+    },
+    // GPT-5.4 series (Codex CLI uses gpt-5.4-mini).
     // More-specific prefixes MUST come before the less-specific ones that
     // they start with (e.g. "gpt-5.4-mini" before "gpt-5.4").
+    ModelPricing {
+        model_prefix: "gpt-5.4-nano",
+        input_per_mtok: 0.20,
+        output_per_mtok: 1.25,
+        cache_write_per_mtok: 0.00,
+        cache_read_per_mtok: 0.02,
+    },
     ModelPricing {
         model_prefix: "gpt-5.4-mini",
         input_per_mtok: 0.75,
@@ -294,10 +348,30 @@ static PRICING: &[ModelPricing] = &[
         cache_read_per_mtok: 7.50,
     },
     // ── Google Gemini ────────────────────────────────────────────────────────
-    // Gemini 3 series (all currently preview). Pricing uses the standard ≤200k token tier.
-    // More-specific prefixes must precede broader ones (e.g. gemini-3.1-flash-lite before
-    // gemini-3.1-pro, since "gemini-3.1-flash-lite" does not start with "gemini-3.1-pro"
-    // and vice-versa — but both would be shadowed by a bare "gemini-3.1" entry).
+    // Gemini 3.6 Flash (released July 2026).
+    ModelPricing {
+        model_prefix: "gemini-3.6-flash",
+        input_per_mtok: 1.50,
+        output_per_mtok: 7.50,
+        cache_write_per_mtok: 1.50,
+        cache_read_per_mtok: 0.15,
+    },
+    // Gemini 3.5 series.
+    ModelPricing {
+        model_prefix: "gemini-3.5-flash-lite",
+        input_per_mtok: 0.30,
+        output_per_mtok: 2.50,
+        cache_write_per_mtok: 1.00,
+        cache_read_per_mtok: 0.03,
+    },
+    ModelPricing {
+        model_prefix: "gemini-3.5-flash",
+        input_per_mtok: 1.50,
+        output_per_mtok: 9.00,
+        cache_write_per_mtok: 1.50,
+        cache_read_per_mtok: 0.15,
+    },
+    // Gemini 3.1 series. Pricing uses the standard ≤200k token tier.
     ModelPricing {
         model_prefix: "gemini-3.1-flash-lite",
         input_per_mtok: 0.25,
