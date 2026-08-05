@@ -132,7 +132,7 @@ pub async fn run_serve(
     let config_snap = state.config.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             // Skip DB acquisition entirely if no WebSocket clients are listening.
             if ws_tx_snap.receiver_count() == 0 {
                 continue;
