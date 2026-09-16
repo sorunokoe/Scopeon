@@ -71,7 +71,7 @@ fn adaptive_interval(snap: &MetricSnapshot) -> std::time::Duration {
     } else if fill >= 50.0 {
         std::time::Duration::from_secs(1) // ACTIVE
     } else {
-        std::time::Duration::from_secs(5) // IDLE
+        std::time::Duration::from_secs(10) // IDLE — no pressure, conserve CPU
     }
 }
 

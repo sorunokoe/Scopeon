@@ -256,6 +256,9 @@ pub struct App {
     pub sessions_sort: SessionSort,
     pub toast: Option<(String, Instant)>,
     pub needs_redraw: bool, // Dirty flag for draw-on-change
+    /// Whether the terminal has focus. When false, refresh rate is heavily
+    /// reduced to save CPU while running in the background.
+    pub has_focus: bool,
 
     // IS-4: Zen mode — collapses TUI to a single ambient status line.
     // Auto-expands when context > 80% or budget > 90%.
@@ -421,6 +424,7 @@ impl App {
             config_preset_selector_active: false,
             config_preset_selected_idx: 0,
             needs_redraw: true, // Draw on first loop
+            has_focus: true,
         }
     }
 
@@ -2517,7 +2521,13 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
         };
 
         // Use the more aggressive of tab base or adaptive urgency interval
-        let effective_interval = tab_base_interval.min(app.refresh_interval);
+        let effective_interval = if app.has_focus {
+            tab_base_interval.min(app.refresh_interval)
+        } else {
+            // Background mode: drastically reduce refresh rate to save CPU.
+            // Only refresh every 30s when the terminal is not focused.
+            Duration::from_secs(30)
+        };
 
         // Calculate deadline for next refresh or animation tick
         let time_until_refresh = effective_interval.saturating_sub(app.last_refresh.elapsed());
@@ -2556,8 +2566,12 @@ pub async fn run_tui(db: Arc<Mutex<Database>>) -> Result<()> {
                 // Clear on focus regain — covers cases where another window
                 // was overlaid and the terminal compositor didn't fully restore.
                 Event::FocusGained => {
+                    app.has_focus = true;
                     terminal.clear()?;
                     app.needs_redraw = true;
+                },
+                Event::FocusLost => {
+                    app.has_focus = false;
                 },
                 _ => {},
             }
